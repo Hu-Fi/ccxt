@@ -43,7 +43,7 @@ use BN\BN;
 use Sop\ASN1\Type\UnspecifiedType;
 use Exception;
 
-$version = '4.3.87';
+$version = '4.3.89';
 
 // rounding mode
 const TRUNCATE = 0;
@@ -62,7 +62,7 @@ const PAD_WITH_ZERO = 6;
 
 class Exchange {
 
-    const VERSION = '4.3.87';
+    const VERSION = '4.3.89';
 
     private static $base58_alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
     private static $base58_encoder = null;
@@ -7181,7 +7181,7 @@ class Exchange {
                     $errors = 0;
                     $result = $this->array_concat($result, $response);
                     $last = $this->safe_value($response, $responseLength - 1);
-                    $paginationTimestamp = $this->safe_integer($last, 'timestamp') - 1;
+                    $paginationTimestamp = $this->safe_integer($last, 'timestamp') + 1;
                     if (($until !== null) && ($paginationTimestamp >= $until)) {
                         break;
                     }
@@ -7631,7 +7631,7 @@ class Exchange {
          */
         if ($this->has['fetchPositionsHistory']) {
             $positions = $this->fetch_positions_history(array( $symbol ), $since, $limit, $params);
-            return $this->safe_dict($positions, 0);
+            return $positions;
         } else {
             throw new NotSupported($this->id . ' fetchPositionHistory () is not supported yet');
         }

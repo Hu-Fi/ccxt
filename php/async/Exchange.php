@@ -43,11 +43,11 @@ use React\EventLoop\Loop;
 
 use Exception;
 
-$version = '4.3.87';
+$version = '4.3.89';
 
 class Exchange extends \ccxt\Exchange {
 
-    const VERSION = '4.3.87';
+    const VERSION = '4.3.89';
 
     public $browser;
     public $marketsLoading = null;
@@ -5436,7 +5436,7 @@ class Exchange extends \ccxt\Exchange {
                         $errors = 0;
                         $result = $this->array_concat($result, $response);
                         $last = $this->safe_value($response, $responseLength - 1);
-                        $paginationTimestamp = $this->safe_integer($last, 'timestamp') - 1;
+                        $paginationTimestamp = $this->safe_integer($last, 'timestamp') + 1;
                         if (($until !== null) && ($paginationTimestamp >= $until)) {
                             break;
                         }
@@ -5896,7 +5896,7 @@ class Exchange extends \ccxt\Exchange {
              */
             if ($this->has['fetchPositionsHistory']) {
                 $positions = Async\await($this->fetch_positions_history(array( $symbol ), $since, $limit, $params));
-                return $this->safe_dict($positions, 0);
+                return $positions;
             } else {
                 throw new NotSupported($this->id . ' fetchPositionHistory () is not supported yet');
             }
