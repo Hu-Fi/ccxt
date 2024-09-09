@@ -1,11 +1,11 @@
 
 //  ---------------------------------------------------------------------------
-
 import Exchange from './abstract/fswap.js';
 import { eddsa } from './base/functions/crypto.js';
+import { base58, base64 } from './static_dependencies/scure-base/index.js';
 import { sha256 } from './static_dependencies/noble-hashes/sha256.js';
 import { ed25519 } from './static_dependencies/noble-curves/ed25519.js';
-import { Balances, Currencies, Dict, Market, MarketInterface, Order, Str, Strings, Ticker, Tickers } from './base/types.js';
+import { Balances, Currencies, Dict, Int, Market, MarketInterface, Order, Str, Trade } from './base/types.js';
 import { BadRequest, ExchangeError, ExchangeNotAvailable, InsufficientFunds, InvalidAddress, InvalidOrder } from './base/errors.js';
 
 //  ---------------------------------------------------------------------------
@@ -81,6 +81,8 @@ export default class fswap extends Exchange {
                 'mixinPrivate': {
                     'get': {
                         'safe/snapshots': 1,
+                        'safe/keys': 1,
+                        'safe/deposit/entries': 1,
                     },
                 },
             },
@@ -122,6 +124,15 @@ export default class fswap extends Exchange {
                 'broad': {
                     'Internal Server Error': ExchangeNotAvailable,
                 },
+            },
+            'options': {
+                'ProtocolVersion': 2,
+                'ActionAdd': 1,
+                'ActionRemove': 2,
+                'ActionSwap': 3,
+                'MainAddressPrefix': 'XIN',
+                'MixAddressPrefix': 'MIX',
+                'MixAddressVersion': 2,
             },
         });
     }
@@ -212,51 +223,46 @@ export default class fswap extends Exchange {
         // Any asset on Mixin has an unique asset id which is an UUID
         // For different version of stablecoin like USDT, they have the same symbol (USDT)
         // we need this function to parse the symbol to respective version
-        switch (tokenId) {
-        case '4d8c508b-91c5-375b-92b0-ee702ed2dac5': {
-            return 'USDT@ERC20';
+        if (tokenId === '4d8c508b-91c5-375b-92b0-ee702ed2dac5') {
+            return 'USDT'; // Set ERC20 USDT as default for symbol 'USDT'
         }
-        case '218bc6f4-7927-3f8e-8568-3a3725b74361': {
+        if (tokenId === '218bc6f4-7927-3f8e-8568-3a3725b74361') {
             return 'USDT@POLYGON';
         }
-        case 'b91e18ff-a9ae-3dc7-8679-e935d9a4b34b': {
+        if (tokenId === 'b91e18ff-a9ae-3dc7-8679-e935d9a4b34b') {
             return 'USDT@TRC20';
         }
-        case '9b180ab6-6abe-3dc0-a13f-04169eb34bfa': {
-            return 'USDC@ERC20';
+        if (tokenId === '9b180ab6-6abe-3dc0-a13f-04169eb34bfa') {
+            return 'USDC'; // Set ERC20 USDC as default for symbol 'USDC'
         }
-        case '80b65786-7c75-3523-bc03-fb25378eae41': {
+        if (tokenId === '80b65786-7c75-3523-bc03-fb25378eae41') {
             return 'USDC@POLYGON';
         }
-        case '30e340a7-3284-3f04-8594-fbdd8f2da79f': {
-            return 'HMT@ERC20';
+        if (tokenId === '30e340a7-3284-3f04-8594-fbdd8f2da79f') {
+            return 'HMT'; // Set ERC20 HMT as default for symbol 'HMT'
         }
-        case '235d8ced-3d41-3c2f-8368-7dba52cb9868': {
+        if (tokenId === '235d8ced-3d41-3c2f-8368-7dba52cb9868') {
             return 'HMT@POLYGON';
         }
-        case '3e3152d4-6eee-36b3-9685-e8ba54db4a22': {
+        if (tokenId === '3e3152d4-6eee-36b3-9685-e8ba54db4a22') {
             return 'JPYC';
         }
-        case '0ff3f325-4f34-334d-b6c0-a3bd8850fc06': {
+        if (tokenId === '0ff3f325-4f34-334d-b6c0-a3bd8850fc06') {
             return 'JPYC-D';
         }
-        case 'b7938396-3f94-4e0a-9179-d3440718156f': {
+        if (tokenId === 'b7938396-3f94-4e0a-9179-d3440718156f') {
             return 'MATIC@POLYGON';
         }
-        case '9682b8e9-6f16-3729-b07b-bc3bc56e5d79': {
-            return 'MATIC@ERC20';
+        if (tokenId === '9682b8e9-6f16-3729-b07b-bc3bc56e5d79') {
+            return 'MATIC'; // Set ERC20 Matic as default for symbol 'Matic'
         }
-        case 'f312d6a7-1b4d-34c0-bf84-75e657a3fcf3': {
+        if (tokenId === 'f312d6a7-1b4d-34c0-bf84-75e657a3fcf3') {
             return 'BUSD@Binance';
         }
-        case 'cfcd55cd-9f76-3941-81d6-9e7616cc1b83': {
+        if (tokenId === 'cfcd55cd-9f76-3941-81d6-9e7616cc1b83') {
             return 'BUSD@BEP20';
         }
-        default: {
-            break;
-        }
-        }
-        return tokenSymbol;
+        return this.safeSymbol (tokenSymbol);
     }
 
     mapAssetIdToSymbol (assetId: string): string {
@@ -297,6 +303,24 @@ export default class fswap extends Exchange {
             'b3c2ae8e-c872-30cf-be73-b53494eda708': 'sBOX-pUSD',
             '1195a517-5314-3075-8d96-d6bc88a63e46': 'sBTC-pUSD',
             '5a19cf8e-29c6-3a24-bf4b-da64c458c323': 'sXIN-pUSD',
+            'b1ab7bad-67f1-3613-bcbb-e8eb12fe5582': 'sEOS-pUSD',
+            'b91e18ff-a9ae-3dc7-8679-e935d9a4b34b': 'USDT',
+            '38710440-7157-36cd-b14a-143a00687074': 'sUSDT@TRON-pUSD',
+            '05c5ac01-31f9-4a69-aa8a-ab796de1d041': 'XMR',
+            '6d204394-23d6-3786-af12-46ac1b1d9679': 'sXMR-BTC',
+            'eea900a8-b327-488c-8d8d-1428702fe240': 'MOB',
+            'f39749aa-c03f-31bb-917a-0c8af5ef4d4f': 'sMOB-BTC',
+            '34e78f06-d77a-3300-9a0e-f5b6d4e5821e': 'sXMR-pUSD',
+            '002fa713-04f0-3642-b66e-e60a6a1aea41': 'sMOB-pUSD',
+            '8549b4ad-917c-3461-a646-481adc5d7f7f': 'DAI',
+            'f56a522f-016c-340f-a074-6e0dae8262de': 'sDAI-pUSD',
+            '9b180ab6-6abe-3dc0-a13f-04169eb34bfa': 'USDC',
+            'b2c3f05a-2d39-33c4-95ab-01b5accac832': 'sUSDC-pUSD',
+            '8f8abf64-c368-3f5f-a663-8a41d2877ece': 'sPRS-USDT',
+            'a31e847e-ca87-3162-b4d1-322bc552e831': 'UNI',
+            '2f17c93b-ea12-312e-b3da-2aef628af07d': 'sUNI-BTC',
+            '54c61a72-b982-4034-a556-0d99e3c21e39': 'DOT',
+            'a4d01987-a350-3756-9255-98ce17faaa93': 'sDOT-BTC',
             '6770a1e5-6086-44d5-b60f-545f9d9e8ffd': 'DOGE',
             'f9cf0db4-30c9-356f-9264-e6ade1a1f021': 'sDOGE-BTC',
             'e1882f66-8fd4-37b3-a763-0ca9667e87c4': 'sDOGE-pUSD',
@@ -333,8 +357,173 @@ export default class fswap extends Exchange {
             'cb0775b5-76f9-34b5-95ce-d56b61d70b8f': 'sAAVE-BTC',
             'aa189c4c-99ca-39eb-8d96-71a8f6f7218a': 'AKITA',
             '6837adb8-36a2-3172-8f2a-83f9f40e8cf2': 'sDOGE-AKITA',
+            '882eb041-64ea-465f-a4da-817bd3020f52': 'AR',
+            '7d6faca2-3365-3b7a-b4eb-4b4ab0eab0cf': 'sAR-BTC',
+            '9682b8e9-6f16-3729-b07b-bc3bc56e5d79': 'MATIC',
+            '967244ab-9c1b-3274-9c06-2d268c225fe8': 'sMATIC-BTC',
+            '8b79271e-b8b1-3782-8b4b-b8cf6cf10881': 'SIM',
+            'a561ea99-0b1f-3aa9-a8c7-69bbece1609c': 'sSIM-USDT',
+            '4f2ec12c-22f4-3a9e-b757-c84b6415ea8f': 'RUM',
+            '2a0f4a37-dff2-3a30-89a0-0f4a6a34f5c7': 'sRUM-USDT',
+            'a53872c5-b1a3-32da-bbc4-230a7ced69cb': 'sRUM-XIN',
+            '76c802a2-7c88-447f-a93e-c29c9e5dd9c8': 'LTC',
+            'e5f72de8-a796-35c8-8b7c-1b4b52cd0c8f': 'sLTC-pUSD',
+            'fd11b6e3-0b87-41f1-a41f-f0e9b49e5bf0': 'BCH',
+            'e448f361-cbbb-3e86-bef6-652f125d55ce': 'sBCH-pUSD',
+            'ffc82f24-fb5f-3716-9650-6a835b3cf1b3': 'sBTC-BCH',
+            '7e6644cd-fe58-3d50-a94a-e331ea4af49c': 'sLTC-BTC',
+            'a2c5d22b-62a2-4c13-b3f0-013290dbac60': 'ZEN',
+            '171c1a9a-e837-35da-9962-6a2bbe085ff0': 'sZEN-BTC',
+            'd8c280b3-8f54-3294-a444-a033234168b1': 'sZEN-XIN',
+            'c3b9153a-7fab-4138-a3a4-99849cadc073': 'VCASH',
+            '152ae670-5312-3b14-85c6-30b6307c6be7': 'sVCASH-pUSD',
+            '8f5caf2a-283d-4c85-832a-91e83bbf290b': 'DCR',
+            'e9091f17-a427-324f-afe7-e32b3a27bcce': 'sDCR-pUSD',
+            '08285081-e1d8-4be6-9edc-e203afa932da': 'FIL',
+            'c2ba61dd-d953-3a21-b2f8-dfc69b67bd15': 'sFIL-pUSD',
+            '872204c9-6618-3237-be39-b1004b6392b7': 'sDCR-BTC',
+            '3d2a6082-7545-335b-884e-76afdb09122c': 'LUNA',
+            '536cc195-4c34-3e29-8ad4-5879402ac244': 'MUSD',
+            '19560aed-9563-32e4-bac9-dba27b1054a0': 'sLUNA-MUSD',
+            '7397e9f1-4e42-4dc8-8a3b-171daaadd436': 'ATOM',
+            '3a1840ff-f490-398c-8f73-a6916b89f5d5': 'sATOM-pUSD',
+            '736fb79f-dd38-3726-b302-2db320b06677': 'sATOM-BTC',
+            '30e340a7-3284-3f04-8594-fbdd8f2da79f': 'HMT',
+            'fc53d3be-f553-30c1-bc8b-c1880bf5bffb': 'sHMT-BTC',
+            '97855cb3-24ca-36e0-881b-3e121a91e17e': 'sHMT-ETH',
+            '8030d66b-7640-3ef5-bb72-be9070ae2441': 'sZEC-pUSD',
+            '73af99da-2bac-3fbb-9666-806be96ecd5c': 'sBTC-ZEC',
+            '13036886-6b83-4ced-8d44-9f69151587bf': 'HNS',
+            'fb636866-305c-31ba-adea-d564037ed78e': 'sHNS-pUSD',
+            '9ef1dd61-4d24-31c5-af10-6075429ee499': 'sHNS-BTC',
+            '910f860f-5bc3-34fa-94be-245fc328d735': 'sMOB-ETH',
+            '9c612618-ca59-4583-af34-be9482f5002d': 'AKT',
+            '09e23109-cb0e-3bbe-bf92-3f7b995a4154': 'sAKT-USDT',
+            '3407ab35-eb3d-38f0-8b9f-03ad421de202': 'sAKT-BTC',
+            '02aad415-fb9b-37e2-8770-3e03fcf8e67b': 'sSIM-MUSD',
+            'f4ef6e60-218b-392a-a91f-8040ed561668': 'sUNI-ETH',
+            '0ff3f325-4f34-334d-b6c0-a3bd8850fc06': 'JPYC',
+            '29f34a02-61a3-3350-a2f3-60f3edfe088c': 'sJPYC-USDC',
+            'c3dc19ae-d087-3279-ac51-dc655940256a': 'MANA',
+            '0c4db6a6-b9f5-34dd-8154-50d3a1b718e0': 'sMANA-ETH',
+            'e59fcc32-c7e1-335a-976d-a6f6aa61d91e': 'sMANA-pUSD',
+            '2ac62e03-b74c-3f98-b605-5018fae8b5e3': 'DFS',
+            '5033c85a-a64b-39e3-b232-ff441526fb02': 'sDFS-XIN',
+            '2f5bef0e-d41a-3cf3-b6fa-b8dd0d8a3327': 'EURT',
+            '26a8cf17-298f-343c-9b7a-00632986bb28': 'sEURT-pUSD',
+            '8e8d677c-e9f1-3201-b1b3-4e46193df4f1': 'XAUt',
+            '68123c75-c242-311d-ae55-bb9a38065f75': 'sXAUt-pUSD',
+            '369ec0df-6f1c-33d4-b72a-82a3eeebbfde': 'LGB',
+            'bbefa345-0709-3224-9834-54ac23f6f283': 'sLGB-ETH',
+            '14693c1a-d835-3572-b9b4-e0cbb62099e5': 'PINK',
+            'fe0ee086-197f-33c7-a06b-089018c51aa3': 'sPINK-USDT',
+            'cbc77539-0a20-4666-8c8a-4ded62b36f0a': 'AVAX',
+            '5b1eac47-4ab9-3ca1-8486-fb138e4c9f05': 'sAVAX-USDT',
+            '8db4d679-d379-3128-b1a1-153a83157244': 'sATOM-XIN',
+            '5e79fbf2-7f08-39c6-9852-b060133f3bcd': 'sDOT-EOS',
+            '6cd12bd0-317e-3165-9553-a47cdb1aae2a': 'sBNB-BOX',
+            '62e6e25d-47a2-3dc9-b481-6d993ebdb5e2': 'sDOT-pUSD',
+            '56e63c06-b506-4ec5-885a-4a5ac17b83c1': 'XLM',
+            'a2679cc7-9734-356b-87b2-7f1baf813fa6': 'sXLM-BTC',
+            'd6ac94f7-c932-4e11-97dd-617867f0669e': 'NEAR',
+            '0e2e5496-a939-3138-861a-aa9558b25acb': 'sNEAR-BTC',
+            '9d8b0ed2-25c3-3bab-ac33-d0d56ebcfef3': 'sNEAR-pUSD',
+            '25dabac5-056a-48ff-b9f9-f67395dc407c': 'TRX',
+            '8a9898a6-4bd8-300e-b612-a92354928d72': 'sTRX-BTC',
+            '7cf8553a-f6f5-36c8-9bd6-7efc4ac2d9e8': 'sTRX-pUSD',
+            '1654d870-42ca-3bfd-8143-2662cf30eaa6': 'sAVAX-BTC',
+            '82f988ca-bcad-32a4-be82-ae5161966076': 'sAVAX-pUSD',
+            '706b6f84-3333-4e55-8e89-275e71ce9803': 'ALGO',
+            'd7a5a7db-b147-3436-8b0f-ed87b76925ee': 'sALGO-BTC',
+            '0474f9e1-4865-34e4-ad36-8bec6183f2f4': 'sALGO-pUSD',
+            '0d114ae4-e530-3333-b445-bc574427e0bd': 'sXLM-pUSD',
+            '99e81647-eb1b-3bdb-b49f-4c432a32e2ed': 'sSHIB-BTC',
+            'ac734f13-75d7-3356-bb6f-25053e0d524a': 'sSHIB-pUSD',
+            '994a488e-0ba6-3212-aba5-33d7f63d6546': 'sFIL-BTC',
+            'f6f1c01c-8489-3346-b127-dc0dc09b9ce7': 'LINK',
+            '47848290-7016-3502-b62f-57d0bc3b81d0': 'sBTC-LINK',
+            'ff07a1c8-975f-356d-b1ae-10caa51738dd': 'sLINK-pUSD',
+            '23dfb5a5-5d7b-48b6-905f-3970e3176e27': 'XRP',
+            '21219f16-93eb-30cf-bb99-af66a35ed7f0': 'sXRP-BTC',
+            '7313694e-156d-3d63-b21b-e12660520a08': 'sXRP-pUSD',
+            'edc5cf24-bae8-3ed5-a8fc-fde92e8ac80f': 'sMATIC-pUSD',
+            '0a1db494-3d41-3391-ae53-16836b0df38b': 'sSOL-BTC',
+            'be77e925-a9af-30d8-ae76-bf0f302d3dae': 'sSOL-pUSD',
+            '574388fd-b93f-4034-a682-01c2bc095d17': 'BSV',
+            '56a1f18b-3c1e-3b2f-bc23-bcbbfa6cb894': 'sBSV-BTC',
+            '54b7a534-bdbe-3fa3-9414-e2fcc6d8c852': 'sBSV-pUSD',
+            '6472e7e3-75fd-48b6-b1dc-28d294ee1476': 'DASH',
+            '1010fe35-c9b9-35ea-ab4a-b53756d7fd53': 'sDASH-BTC',
+            'd8be3196-bce2-3a94-aecb-df1175f780df': 'sDASH-pUSD',
+            '6877d485-6b64-4225-8d7e-7333393cb243': 'RVN',
+            'b88117dc-e6aa-32fc-848c-01bd2eb2f530': 'sRVN-BTC',
+            'f7876e73-1139-3a6e-98b4-4c81490caee0': 'sRVN-pUSD',
+            '5649ca42-eb5f-4c0e-ae28-d9a4e77eded3': 'XTZ',
+            '0eb758d6-5466-31cc-a994-5550038b2115': 'sXTZ-BTC',
+            '337f9d45-3951-399e-b983-5ca0b65ce5b4': 'sXTZ-pUSD',
+            '9d29e4f6-d67c-4c4b-9525-604b04afbe9f': 'KSM',
+            '1f97917c-73ab-3a08-b48d-50e132812af0': 'sKSM-BTC',
+            'c74e77b1-3afe-3e7a-b9f2-fd9562c98881': 'sKSM-pUSD',
+            '2204c1ee-0ea2-4add-bb9a-b3719cfff93a': 'ETC',
+            '63383884-195b-3ec7-b4ef-d19aaa6c12ea': 'sETC-pUSD',
+            'd1b5a372-0c1e-380a-9299-2ed46bbe24a4': 'sETC-BTC',
+            '0e9dc642-a84c-3a0e-992b-0646130bca59': 'sUSDC-USDT',
+            'c9d54a52-e8fe-3711-81bf-74a4d48bc2f4': 'sUSDT@TRON-USDT',
+            '75e0414b-b190-3783-995a-e6064d30c55d': 'TYC',
+            '61254794-4625-30bc-8141-41d7a3ab9a9f': 'sTYC-pUSD',
+            'c06b0228-cc1d-3f7f-aa56-8de1ddab0602': 'sTYC-BTC',
+            '5c5d9bf9-8744-3a51-a5d3-c07bcf7b271c': 'YYD',
+            '312beac2-0115-30de-a255-e7f26bb6845c': 'sYYD-MUSD',
+            '0c79a53f-9caf-3e7c-a3ce-1edcba33301f': 'FTX Token',
+            '068e555c-829b-3d7e-9fba-6ba209fd1730': 'sFTT-BTC',
+            'ba2bce62-a46f-3d6d-b568-6a64dc2d9d07': 'sFTT-pUSD',
+            'f312d6a7-1b4d-34c0-bf84-75e657a3fcf3': 'BUSD',
+            '77c0b1f6-eea5-309a-bfe7-c4e1c0f32408': 'sMOB-BUSD',
+            'afb1f1ba-9742-307f-b771-024121f07b73': 'sUSDC-BUSD',
+            '0ff78889-282e-3f18-81b6-602d54e19af1': 'sHMT-USDT',
+            'b12bb04a-1cea-401c-a086-0be61f544889': 'XDC',
+            '37e5e7f8-7067-3ce6-bb51-88f6e0e40fae': 'sUSDT-XDC',
+            'e4692b8f-5e4e-3c37-924c-b5b5f4ce3323': 'sUSDT-PLI',
+            '635b0402-a87a-3e2d-b019-5b1316f5c05e': 'PLI',
+            'a3b84192-d319-3719-9d43-31fabbbccee7': 'CGO',
+            'fffefbab-6b94-3326-93e8-d06157a0ff94': 'sUSDT-CGO',
+            '34570682-2156-3812-bddb-7f2881f041ec': 'SRX',
+            '47ed4523-47fa-3bc2-ae3a-c720ead46a48': 'sUSDT-SRX',
+            'ad7ea4ed-5469-3f2a-b5a3-c61521df08c6': 'sUSDC-eUSD',
+            '659c407a-0489-30bf-9e6f-84ef25c971c9': 'eUSD',
+            'c733ee2e-30fc-327a-ad29-54bdf09154a7': 'sMOB-eUSD',
+            '3e3152d4-6eee-36b3-9685-e8ba54db4a22': 'JPYC',
+            'b829c292-855a-30ce-850b-1f24418a6f64': 'sPUSD-JPYC',
+            '57afad18-f20b-306b-914e-7ef159413b35': 'sUSDT-TRC-TWBTC',
+            '5f363928-dcee-3708-838d-b5d3852d1569': 'TWBTC',
+            '384fa667-397f-3d05-a60c-70d1f61c1159': 'MVP',
+            'd671f175-63cb-367d-a933-73dafe3fb9d0': 'sTWBTC-MVP',
+            '519dc4c9-f182-3319-aa86-bc44377ba0b5': 'sMOB-BUSD@BEP20',
+            'cfcd55cd-9f76-3941-81d6-9e7616cc1b83': 'BUSD',
+            '889febfe-d092-3096-bd63-3791c93f48ee': 'sUSDT-USDC',
+            '80b65786-7c75-3523-bc03-fb25378eae41': 'USDC',
+            '01c19815-a280-3adb-8b2a-97a8794b5d41': 'sUSDC-BUSD',
+            'b8b31258-71fc-38d0-a3c2-1694a3a8d432': 'sUSDC-USDC',
+            '66049fae-1823-3019-9f01-8c9652de3213': 'sMATIC-MATIC',
+            'b7938396-3f94-4e0a-9179-d3440718156f': 'MATIC',
+            '89910ef6-2a0a-3674-9bdc-e1ac992e6a33': 'sBTC-TWBTC',
+            'e0567fa0-4922-312f-ad53-23f51d7f29b8': 'sMVP-CNBTC',
+            'e533b919-d043-3afd-9ced-b906d1e2fef6': 'CNBTC',
+            '44adc71b-0c37-3b42-aa19-fe2d59dae5fd': 'EPC',
+            '7972ba2f-2bb9-346d-ab62-1ba16974ee24': 'sUSDT-EPC',
+            'c80b9332-0122-305c-9b2e-69668d3b6600': 'sUSDC-HMT',
+            'db1a68dd-f40b-37ed-b21b-46143d2905e2': 'sPUSD-HMT',
+            '964d1751-5d1b-33ea-b6c5-321fa1be30b1': 'sHMT-HMT',
+            '235d8ced-3d41-3c2f-8368-7dba52cb9868': 'HMT',
+            '218bc6f4-7927-3f8e-8568-3a3725b74361': 'USDT',
+            'e78edb5c-36b0-39ce-930d-b681213c4b09': 'sUSDT@MATIC-USDT@ETH',
+            'a45217b9-5a83-3da1-950a-50217baa6dc1': 's3056.HK-pUSD',
+            '5c392265-1e05-3520-a25b-2fe9e36510d7': '3056.HK',
+            '22bd6062-e0d8-3d1f-af70-051caa8af902': 'sEUSD-USDT',
         };
-        return assetMap[assetId] || '';
+        const symbol = this.safeString (assetMap, assetId);
+        const finalSymbol = this.parseSpecialSymbol (assetId, symbol);
+        return finalSymbol;
     }
 
     async fetchCurrencies (params = {}): Promise<Currencies> {
@@ -380,7 +569,10 @@ export default class fswap extends Exchange {
         for (let i = 0; i < assets.length; i++) {
             const asset = assets[i];
             const id = this.safeString (asset, 'id');
-            const code = this.safeString (asset, 'symbol');
+            if (!id) {
+                continue;
+            }
+            const code = this.parseSpecialSymbol (id, this.safeString (asset, 'symbol'));
             const name = this.safeString (asset, 'name');
             const logo = this.safeString (asset, 'logo');
             const chain = this.safeValue (asset, 'chain', {});
@@ -425,74 +617,6 @@ export default class fswap extends Exchange {
         return result;
     }
 
-    async fetchTicker (symbol: string, params = {}): Promise<Ticker> {
-        //
-        // @method
-        // @name fswap#fetchTicker
-        // @description retrieves the ticker data for a specific market on fswap
-        // @see https://developers.pando.im/references/4swap/api.html#read-pairs
-        // @param {string} symbol unified symbol of the market to fetch the ticker for
-        // @param {object} [params] extra parameters specific to the exchange API endpoint
-        // @returns {object} a ticker structure
-        //
-        await this.loadMarkets ();
-        const market = this.market (symbol);
-        const response = await this.fswapPublicGetCmcPairs (params);
-        const pairs = this.safeValue (response, 'data', {}).pairs || [];
-        const pair = this.safeValue (pairs, market.id);
-        if (!pair) {
-            throw new ExchangeError (this.id + ' fetchTicker() could not find pair for symbol: ' + symbol);
-        }
-        return this.parseTicker (pair, market);
-    }
-
-    parseTicker (pair: Dict, market: Market = undefined): Ticker {
-        // {
-        //   "05c5ac01-31f9-4a69-aa8a-ab796de1d041_31d2ea9c-95eb-3355-b65b-ba096853bc18": {
-        //     "base_id": "05c5ac01-31f9-4a69-aa8a-ab796de1d041",
-        //     "base_name": "Monero",
-        //     "base_symbol": "XMR",
-        //     "quote_id": "31d2ea9c-95eb-3355-b65b-ba096853bc18",
-        //     "quote_name": "Pando USD",
-        //     "quote_symbol": "pUSD",
-        //     "last_price": "148.2384060238058983",
-        //     "base_volume": "0",
-        //     "quote_volume": "0",
-        //     "base_value": "924.95",
-        //     "quote_value": "970.01",
-        //     "volume_24h": "0",
-        //     "fee_24h": "0",
-        //     "depth_up_2": "9.65",
-        //     "depth_down_2": "9.11"
-        //   }
-        // }
-        const last = this.safeNumber (pair, 'last_price');
-        const baseVolume = this.safeNumber (pair, 'base_volume');
-        const quoteVolume = this.safeNumber (pair, 'quote_volume');
-        return {
-            'symbol': symbol,
-            'timestamp': this.milliseconds (),
-            'datetime': this.iso8601 (this.milliseconds ()),
-            'high': undefined,
-            'low': undefined,
-            'bid': undefined,
-            'bidVolume': undefined,
-            'ask': undefined,
-            'askVolume': undefined,
-            'vwap': undefined,
-            'open': undefined,
-            'close': undefined,
-            'last': last,
-            'previousClose': undefined,
-            'change': undefined,
-            'percentage': undefined,
-            'average': undefined,
-            'baseVolume': baseVolume,
-            'quoteVolume': quoteVolume,
-            'info': pair,
-        };
-    }
-
     async fetchBalance (params = {}): Promise<Balances> {
         //
         // @method
@@ -507,66 +631,80 @@ export default class fswap extends Exchange {
         return this.parseBalance (outputs);
     }
 
-    parseBalance (outputs: any): Balances {
+    parseBalance (outputs: Dict): Balances {
         // {
         //   "type": "kernel_output",
-        //   "output_id": "77e0c5ba-3e83-3b96-889e-7fdd1066fa85",
-        //   "transaction_hash": "8b6a6875ffcc26324a4961312293cd811b40b55f7afbf7244faf6e97016179fc",
+        //   "output_id": "bfdec3d3-b269-3266-8d2e-8b51a660ceb4",
+        //   "transaction_hash": "1865f9419622328cff1edaef3a6c9dfbb27991de6fc006ac1d484d28bee523b4",
         //   "output_index": 0,
-        //   "amount": "0.01",
-        //   "mask": "86eda37adf63a94e981d26b9e722461a47b709eef73f1c1dd86f6a9c028edb17",
+        //   "amount": "0.00000001",
+        //   "mask": "dcdd4988c7acd966d7ca81ce45343afc7831f6471de976f0334e2276ab9bc0bd",
         //   "keys": [
-        //       "eb272feb82af89200ef963ce7262e7a2cef8da24048eca29924adc2a4c2a727b"
+        //     "6944914904afc40d189cf5848ff9620193ac1a001b6e5ff10e202dd4497c4cd9"
         //   ],
-        //   "senders_hash": "",
-        //   "senders_threshold": 0,
-        //   "senders": [],
-        //   "receivers_hash": "4359debc900a2e3805b7ac06012a5ff93cf90d130fdb0408769aef74587ee3ef",
+        //   "senders_hash": "a8c4d19a7c921820b7d06674d3c6309dda518fd15547ccb5b7b953e3e99149e3",
+        //   "senders_threshold": 1,
+        //   "senders": [
+        //     "44d9717d-8cae-4004-98a1-f9ad544dcfb1"
+        //   ],
+        //   "receivers_hash": "774cd40bc68f867ccb7f79f702fcfbb8f2bd83ce7c781cbae0ef517b20771c0a",
         //   "receivers_threshold": 1,
         //   "receivers": [
-        //       "f6487fa6-57b2-4c0a-9263-b9d9a3a914d8"
+        //     "73179ddc-3e29-485b-bb13-03f514d4318e"
         //   ],
-        //   "extra": "",
-        //   "state": "unspent",
-        //   "sequence": 89745,
-        //   "created_at": "2023-12-07T10:46:40.930055Z",
-        //   "updated_at": "2023-12-07T10:46:40.930055Z",
-        //   "signed_by": "",
-        //   "signed_at": "0001-01-01T00:00:00Z",
-        //   "spent_at": "0001-01-01T00:00:00Z",
-        //   "asset_id": "b7938396-3f94-4e0a-9179-d3440718156f",
-        //   "signers": null,
-        //   "request_id": "",
-        //   "kernel_asset_id": "9f5cadff797f241bbe5623ec0a137011b76a6898a7589741cc0e665f7f32a337",
-        //   "asset": "9f5cadff797f241bbe5623ec0a137011b76a6898a7589741cc0e665f7f32a337"
+        //   "extra": "51564936513149364d4451364d444936576a6448517a6f325a545a6c597a5935596930304e474e694c5451774d575974595755304e4330785957513559545a694f5468694d5459",
+        //   "state": "spent",
+        //   "sequence": 8257839,
+        //   "created_at": "2024-04-15T13:18:24.996154Z",
+        //   "updated_at": "2024-05-15T10:48:57.894339Z",
+        //   "signed_by": "0b1caaea515cc30b4df555a97b07f51c46bd4e61baa80dd730ec8c3da27a9bed",
+        //   "signed_at": "2024-05-15T10:48:57.040218385Z",
+        //   "spent_at": "2024-05-15T10:48:57.887095292Z",
+        //   "asset_id": "c6d0c728-2624-429b-8e0d-d9d19b6592fa",
+        //   "signers": [
+        //     "73179ddc-3e29-485b-bb13-03f514d4318e"
+        //   ],
+        //   "request_id": "73b938d9-358f-431a-9818-31a2f8029ce3",
+        //   "kernel_asset_id": "fe6b7788944d328778f98e3e81588215b5a07de4f9a4a7de4db4535b404e65db",
+        //   "asset": "fe6b7788944d328778f98e3e81588215b5a07de4f9a4a7de4db4535b404e65db"
         // }
-
-        const balances = outputs.reduce ((acc, output) => {
-            const assetId = this.safeString (output, 'asset_id');
-            const amount = this.safeNumber (output, 'amount');
-            if (!acc[assetId]) {
-                acc[assetId] = {
+        const balances: Dict = {
+            'info': {
+                'code': '0',
+                'data': [],
+                'msg': '',
+            },
+            'timestamp': this.milliseconds (),
+            'datetime': this.iso8601 (this.milliseconds ()),
+            'free': {},
+            'used': {},
+            'total': {},
+        };
+        for (let i = 0; i < outputs.length; i++) {
+            const output = outputs[i];
+            if (output.state === 'spent') {
+                continue;
+            }
+            const assetId = output.asset_id;
+            const amount = parseFloat (output.amount);
+            const symbol = this.mapAssetIdToSymbol (assetId);
+            if (!balances[symbol]) {
+                balances[symbol] = {
                     'free': 0,
                     'used': 0,
                     'total': 0,
                 };
             }
-            acc[assetId]['total'] += amount;
-            acc[assetId]['free'] += amount;
-            return acc;
-        }, {} as { [key: string]: { free: number, used: number, total: number } });
-        const result: Balances = { 'info': response };
-        Object.keys (balances).forEach ((assetId) => {
-            const currency = this.safeCurrencyCode (assetId);
-            result[currency] = {
-                'free': balances[assetId]['free'],
-                'used': balances[assetId]['used'],
-                'total': balances[assetId]['total'],
-            };
-        });
-        return result;
+            balances[symbol].free += amount;
+            balances[symbol].total += amount;
+            balances.free[symbol] = balances[symbol].free;
+            balances.used[symbol] = balances[symbol].used;
+            balances.total[symbol] = balances[symbol].total;
+        }
+        return balances;
     }
 
+    // Not tested
     async fetchOrder (id: string, symbol: Str = undefined, params = {}): Promise<Order> {
         //
         // @method
@@ -583,20 +721,273 @@ export default class fswap extends Exchange {
             }, params)
         );
         const order = this.safeValue (response, 'data', {});
-        // Example API response:
-        // {
-        //   "data": {
-        //     "id": "87ae5014-d20f-4cf1-b530-8771137e4e0e",
-        //     "created_at": "2020-09-15T03:35:34Z",
-        //     "user_id": "8017d200-7870-4b82-b53f-74bae1d2dad7",
-        //     "state": "Done", // order status Trading/Rejected/Done
-        //     ...
-        //   }
-        // }
         return this.parseOrder (order);
     }
 
-    sign (path, api = 'public', method = 'GET', params = {}, headers = undefined, body = undefined) {
+    parseOrder (order: Dict): Order {
+        // {
+        //   "id": "87ae5014-d20f-4cf1-b530-8771137e4e0e",
+        //   "created_at": "2020-09-15T03:35:34Z",
+        //   "user_id": "8017d200-7870-4b82-b53f-74bae1d2dad7",
+        //   "state": "Done", // order status Trading/Rejected/Done
+        //   "pay_asset_id": "6cfe566e-4aad-470b-8c9a-2fd35b49c68d",
+        //   "fill_asset_id": "c6d0c728-2624-429b-8e0d-d9d19b6592fa",
+        //   "pay_amount": "1",
+        //   "fill_amount": "00025725",
+        //   "min_amount": "0.0002521",
+        //   "routes": "1bv",
+        //   "route_assets": [
+        //     "6cfe566e-4aad-470b-8c9a-2fd35b49c68d",
+        //     "c6d0c728-2624-429b-8e0d-d9d19b6592fa"
+        //   ],
+        //   "transactions": [
+        //     {
+        //       "id": "87ae5014-d20f-4cf1-b530-8771137e4e0e",
+        //       "created_at": "2020-09-15T03:35:34Z",
+        //       "user_id": "8017d200-7870-4b82-b53f-74bae1d2dad7",
+        //       "type": "Swap",
+        //       "base_asset_id": "6cfe566e-4aad-470b-8c9a-2fd35b49c68d",
+        //       "quote_asset_id": "c6d0c728-2624-429b-8e0d-d9d19b6592fa",
+        //       "base_amount": "1",
+        //       "quote_amount": "-0.00025725",
+        //       "fee_asset_id": "6cfe566e-4aad-470b-8c9a-2fd35b49c68d",
+        //       "fee_amount": "0.003",
+        //       "pay_asset_id": "6cfe566e-4aad-470b-8c9a-2fd35b49c68d",
+        //       "filled_asset_id": "c6d0c728-2624-429b-8e0d-d9d19b6592fa",
+        //       "funds": "1",
+        //       "amount": "0.00025725"
+        //     }
+        //   ]
+        // }
+        const id = this.safeString (order, 'id');
+        const timestamp = this.parse8601 (this.safeString (order, 'created_at'));
+        const datetime = this.iso8601 (timestamp);
+        const status = this.parseOrderStatus (this.safeString (order, 'state'));
+        const payAssetId = this.safeString (order, 'pay_asset_id');
+        const fillAssetId = this.safeString (order, 'fill_asset_id');
+        const paySymbol = this.mapAssetIdToSymbol (payAssetId);
+        const fillSymbol = this.mapAssetIdToSymbol (fillAssetId);
+        const symbol = paySymbol + '/' + fillSymbol;
+        const amount = this.safeNumber (order, 'pay_amount');
+        const filled = this.safeNumber (order, 'fill_amount');
+        const remaining = amount - filled;
+        const transactions = this.safeValue (order, 'transactions', []);
+        const firstTx = this.safeValue (transactions, 0, {});
+        const price = this.safeNumber (firstTx, 'quote_amount');
+        const cost = amount * price;
+        const fee = {
+            'cost': this.safeNumber (firstTx, 'fee_amount'),
+            'currency': this.mapAssetIdToSymbol (this.safeString (firstTx, 'fee_asset_id')),
+        };
+        return {
+            'id': id,
+            'clientOrderId': undefined,
+            'datetime': datetime,
+            'timestamp': timestamp,
+            'lastTradeTimestamp': undefined,
+            'status': status,
+            'symbol': symbol,
+            'type': 'market',
+            'timeInForce': undefined,
+            'side': amount > 0 ? 'buy' : 'sell',
+            'price': price,
+            'average': undefined,
+            'amount': Math.abs (amount),
+            'filled': filled,
+            'remaining': remaining,
+            'cost': cost,
+            'trades': [],
+            'fee': fee,
+            'info': order,
+            'reduceOnly': false,
+            'postOnly': false,
+            'stopPrice': undefined,
+            'triggerPrice': undefined,
+            'takeProfitPrice': undefined,
+            'stopLossPrice': undefined,
+        };
+    }
+
+    parseOrderStatus (status: string): string {
+        const statuses = {
+            'Trading': 'open',
+            'Done': 'closed',
+            'Rejected': 'canceled',
+        };
+        return this.safeString (statuses, status, status);
+    }
+
+    findSymbol (payAssetId: string, fillAssetId: string): string {
+        const paySymbol = this.safeCurrencyCode (payAssetId);
+        const fillSymbol = this.safeCurrencyCode (fillAssetId);
+        return paySymbol + '/' + fillSymbol;
+    }
+
+    // Not tested
+    async fetchMyTrades (symbol: Str = undefined, since: Int = undefined, limit: Int = undefined, params = {}): Promise<Trade[]> {
+        await this.loadMarkets ();
+        const market = this.market (symbol);
+        // Prepare request parameters
+        const request = {
+            'base': market['baseId'],
+            'quote': market['quoteId'],
+            'limit': limit,
+            ...params,
+        };
+        // Fetch the trades
+        const response = await this.fswapPrivateGetTransactionsBaseQuoteMine (this.extend (request, params));
+        const data = this.safeValue (response, 'data', {});
+        const trades = this.safeValue (data, 'transactions', []);
+        const result = this.parseTrades (trades, market, since, limit);
+        return result;
+    }
+
+    // Not tested
+    parseTrade (trade: any, market: any): Trade {
+        const timestamp = this.parse8601 (this.safeString (trade, 'created_at'));
+        const baseAmount = this.safeNumber (trade, 'base_amount');
+        const quoteAmount = this.safeNumber (trade, 'quote_amount');
+        const price = quoteAmount / baseAmount;
+        const id = this.safeString (trade, 'id');
+        return {
+            'id': id,
+            'order': undefined,
+            'timestamp': timestamp,
+            'datetime': this.iso8601 (timestamp),
+            'symbol': market['symbol'],
+            'type': undefined,
+            'side': undefined,
+            'price': price,
+            'amount': baseAmount,
+            'cost': quoteAmount,
+            'fee': {
+                'cost': this.safeNumber (trade, 'fee_amount'),
+                'currency': market['quote'],
+            },
+            'takerOrMaker': 'taker',
+            'info': trade,
+        };
+    }
+
+    buildAction (action: number, followID: string, ...args: any[]) {
+        let follow_id = followID;
+        if (!follow_id) {
+            follow_id = this.uuid ();
+        }
+        const header = {
+            'version': this.options.protocolVersion,
+            'protocol_id': this.options.protocolID,
+            'follow_id': follow_id,
+            'action': action,
+        };
+        const encoder = new TextEncoder ();
+        const headerBytes = encoder.encode (JSON.stringify (header));
+        const argsBytes = [];
+        for (let i = 0; i < args.length; i++) {
+            argsBytes.push (encoder.encode (JSON.stringify (args[i])));
+        }
+        let totalLength = headerBytes.length;
+        for (let i = 0; i < argsBytes.length; i++) {
+            totalLength += argsBytes[i].length;
+        }
+        const allBytes = new Uint8Array (totalLength);
+        allBytes.set (headerBytes, 0);
+        let offset = headerBytes.length;
+        for (let i = 0; i < argsBytes.length; i++) {
+            allBytes.set (argsBytes[i], offset);
+            offset += argsBytes[i].length;
+        }
+        const checksum = this.hash (allBytes, sha256, 'hex');
+        const combined = new Uint8Array (allBytes.length + checksum.words.length);
+        combined.set (allBytes, 0);
+        combined.set (checksum.words, allBytes.length);
+        return base64.encode (combined);
+    }
+
+    buildAddLiquidity (followID: string, oppositeAsset: string, slippage: string, expireDuration: number) {
+        return this.buildAction (
+            this.options.actionAdd,
+            followID,
+            oppositeAsset,
+            slippage.toString (),
+            Math.floor (expireDuration / 1000)
+        );
+    }
+
+    buildRemoveLiquidity (followID: string): string {
+        return this.buildAction (
+            this.options.actionRemove,
+            followID
+        );
+    }
+
+    buildSwap (followID: string, fillAsset: string, paths: any, minAmount: string) {
+        return this.buildAction (
+            this.options.actionSwap,
+            followID,
+            fillAsset,
+            paths,
+            minAmount.toString ()
+        );
+    }
+
+    getPublicFromMainnetAddress (address: string): Buffer | undefined {
+        try {
+            if (!address.startsWith (this.options.MainAddressPrefix)) return undefined;
+            const data = base58.decode (address.slice (3));
+            if (data.length !== 68) return undefined;
+            const payload = data.subarray (0, data.length - 4);
+            const msg = Buffer.concat ([ Buffer.from (this.options.MainAddressPrefix), Buffer.from (payload) ]);
+            const checksum = this.options.newHash (msg);
+            if (!checksum.subarray (0, 4).equals (data.subarray (64))) return undefined;
+            return Buffer.from (payload);
+        } catch {
+            return undefined;
+        }
+    }
+
+    buildMixAddress = (ma: Dict) => {
+        if (ma.members.length > 255) {
+            throw new Error (`Invalid members length: ${ma.members.length}`);
+        }
+        if (ma.threshold === 0 || ma.threshold > ma.members.length) {
+            throw new Error (`Invalid threshold: ${ma.threshold}`);
+        }
+        const prefix = Buffer.concat ([ Buffer.from ([ this.options.MixAddressVersion ]), Buffer.from ([ ma.threshold ]), Buffer.from ([ ma.members.length ]) ]);
+        let type = '';
+        const memberData = [];
+        for (let i = 0; i < ma.members.length; i++) {
+            const addr = ma.members[i];
+            if (addr.startsWith (this.options.MainAddressPrefix)) {
+                if (!type) type = 'xin';
+                if (type !== 'xin') throw new Error ('Inconsistent address type');
+                const pub = this.getPublicFromMainnetAddress (addr);
+                if (!pub) throw new Error (`Invalid mainnet address: ${addr}`);
+                memberData.push (pub);
+            } else {
+                if (!type) type = 'uuid';
+                if (type !== 'uuid') throw new Error ('Inconsistent address type');
+                const id = Buffer.from (addr.replace (/-/g, ''), 'hex');
+                if (!id) throw new Error (`Invalid UUID address: ${addr}`);
+                memberData.push (Buffer.from (Uint8Array.from (id)));
+            }
+        }
+        const msg = Buffer.concat ([ Buffer.from (this.options.MixAddressPrefix), prefix, ...memberData ]);
+        const checksum = Buffer.from (sha256.create ().update (msg).digest ());
+        const data = Buffer.concat ([ prefix, ...memberData, checksum.subarray (0, 4) ]);
+        return `${this.options.MixAddressPrefix}${base58.encode (data)}`;
+    };
+
+    buildSafeTransactionRecipient (members: string[], threshold: number, amount: string) {
+        return {
+            members,
+            threshold,
+            amount,
+            'mixAddress': this.buildMixAddress ({ members, threshold }),
+        };
+    }
+
+    sign (path, api = 'fswapPublic', method = 'GET', params = {}, headers = undefined, body = undefined) {
         //
         // @method
         // @name fswap#sign
@@ -610,17 +1001,14 @@ export default class fswap extends Exchange {
         // @returns {object} an object containing the signed request data (url, method, body, headers)
         //
         let url = this.urls['api'][api] + '/' + this.implodeParams (path, params);
-        if (api === 'private') {
+        if (api === 'mixinPrivate' || api === 'fswapPrivate') {
             this.checkRequiredCredentials ();
             const requestID = this.uuid ();
-            const jwtToken = this.signAccessToken (method, url, {
-                'app_id': this.uid,
-                'session_id': this.login,
-                'server_public_key': this.apiKey,
-                'session_private_key': this.password,
-                'spend_private_key': this.privateKey,
-                'oauth_client_secret': this.secret,
-            }, requestID);
+            let actualPath = '/' + path;
+            if (api === 'fswapPrivate') {
+                actualPath = '/me';
+            }
+            const jwtToken = this.signAuthenticationToken (method, actualPath, params, requestID);
             headers = {
                 'Content-Type': 'application/json',
                 'Authorization': 'Bearer ' + jwtToken,
@@ -640,25 +1028,32 @@ export default class fswap extends Exchange {
     }
 
     base64RawURLEncode (raw: Buffer | Uint8Array | string): string {
-        return this.urlencodeBase64 (raw);
+        let buf = raw;
+        if (typeof raw === 'string') {
+            buf = Buffer.from (raw);
+        } else if (raw instanceof Uint8Array) {
+            buf = Buffer.from (raw);
+        }
+        if (buf.length === 0) {
+            return '';
+        }
+        return buf.toString ('base64').replace (/=+$/, '').replace (/\+/g, '-').replace (/\//g, '_');
     }
 
     signToken (payload: Object, private_key: string): string {
         const header = this.base64RawURLEncode (this.json ({ 'alg': 'EdDSA', 'typ': 'JWT' }));
         const payloadStr = this.base64RawURLEncode (this.json (payload));
-        const signData = eddsa (
-            header + '.' + payloadStr,
-            private_key,
-            ed25519
-        );
-        const sign = this.base64RawURLEncode (signData);
+        const message = header + '.' + payloadStr;
+        const privateKey = Buffer.from (private_key, 'hex');
+        const signData = eddsa (this.encode (message), privateKey, ed25519);
+        const sign = this.base64RawURLEncode (base64.decode (signData));
         return header + '.' + payloadStr + '.' + sign;
     }
 
     signAuthenticationToken (methodRaw: string, uri: string, params = {}, requestID: string = '') {
-        const app_id = this.safeString (params, 'app_id');
-        const session_id = this.safeString (params, 'session_id');
-        const session_private_key = this.safeString (params, 'session_private_key');
+        const app_id = this.uid;
+        const session_id = this.login;
+        const session_private_key = this.password;
         let method = 'GET';
         if (methodRaw) {
             method = methodRaw.toUpperCase ();
@@ -669,9 +1064,12 @@ export default class fswap extends Exchange {
         } else if (typeof params === 'string') {
             data = params;
         }
+        if (data === '{}') {
+            data = '';
+        }
         const iat = Math.floor (Date.now () / 1000);
         const exp = iat + 3600;
-        const sig = this.hash (method + uri + data, sha256, 'hex');
+        const sig = this.hash (new TextEncoder ().encode (method + uri + data), sha256, 'hex');
         const payload = {
             'uid': app_id,
             'sid': session_id,
@@ -682,13 +1080,5 @@ export default class fswap extends Exchange {
             'scp': 'FULL',
         };
         return this.signToken (payload, session_private_key);
-    }
-
-    signAccessToken (methodRaw: string | undefined, uri: string, params = {}, requestID: string = ''): string {
-        const app_id = this.safeString (params, 'app_id');
-        if (!app_id) {
-            return '';
-        }
-        return this.signAuthenticationToken (methodRaw, uri, params, requestID);
     }
 }
