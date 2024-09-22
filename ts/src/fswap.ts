@@ -7,6 +7,7 @@ import { ed25519 } from './static_dependencies/noble-curves/ed25519.js';
 import { base58, base64 } from './static_dependencies/scure-base/index.js';
 import { BadRequest, ExchangeError, ExchangeNotAvailable, InsufficientFunds, InvalidAddress, InvalidOrder } from './base/errors.js';
 import { Balances, Currencies, Dict, Int, Market, MarketInterface, Num, Order, OrderSide, OrderType, Str, Trade } from './base/types.js';
+import { Precise } from './base/Precise.js';
 
 //  ---------------------------------------------------------------------------
 
@@ -48,6 +49,7 @@ export default class fswap extends Exchange {
                     'fswapPrivate': 'https://api.4swap.org/api',
                     'mixinPublic': 'https://api.mixin.one',
                     'mixinPrivate': 'https://api.mixin.one',
+                    'ccxtProxy': 'http://127.0.0.1:8080',
                 },
                 'doc': 'https://developers.pando.im/references/4swap/api.html',
             },
@@ -83,6 +85,11 @@ export default class fswap extends Exchange {
                         'safe/snapshots': 1,
                         'safe/keys': 1,
                         'safe/deposit/entries': 1,
+                    },
+                },
+                'ccxtProxy': {
+                    'post': {
+                        '4swap/preorder': 1,
                     },
                 },
             },
@@ -482,11 +489,11 @@ export default class fswap extends Exchange {
             },
             'limits': {
                 'amount': {
-                    'min': this.parseNumber (0.0000001),
+                    'min': this.parseNumber ('0.0000001'),
                     'max': undefined,
                 },
                 'price': {
-                    'min': this.parseNumber (0.0000001),
+                    'min': this.parseNumber ('0.0000001'),
                     'max': undefined,
                 },
             },
@@ -707,20 +714,20 @@ export default class fswap extends Exchange {
                 continue;
             }
             const assetId = output.asset_id;
-            const amount = parseFloat (output.amount);
+            const amount = output.amount;
             const symbol = this.mapAssetIdToSymbol (assetId);
             if (!balances[symbol]) {
                 balances[symbol] = {
-                    'free': 0,
-                    'used': 0,
-                    'total': 0,
+                    'free': '0',
+                    'used': '0',
+                    'total': '0',
                 };
             }
-            balances[symbol].free += amount;
-            balances[symbol].total += amount;
-            balances.free[symbol] = balances[symbol].free;
-            balances.used[symbol] = balances[symbol].used;
-            balances.total[symbol] = balances[symbol].total;
+            balances[symbol].free = Precise.stringAdd (balances[symbol].free, amount);
+            balances[symbol].total = Precise.stringAdd (balances[symbol].total, amount);
+            balances.free[symbol] = this.parseNumber (balances[symbol].free);
+            balances.used[symbol] = this.parseNumber (balances[symbol].used);
+            balances.total[symbol] = this.parseNumber (balances[symbol].total);
         }
         return balances;
     }
@@ -789,13 +796,13 @@ export default class fswap extends Exchange {
         const paySymbol = this.mapAssetIdToSymbol (payAssetId);
         const fillSymbol = this.mapAssetIdToSymbol (fillAssetId);
         const symbol = paySymbol + '/' + fillSymbol;
-        const amount = this.safeNumber (order, 'pay_amount');
-        const filled = this.safeNumber (order, 'fill_amount');
-        const remaining = amount - filled;
+        const amount = this.safeString (order, 'pay_amount');
+        const filled = this.safeString (order, 'fill_amount');
+        const remaining = Precise.stringSub (amount, filled);
         const transactions = this.safeValue (order, 'transactions', []);
         const firstTx = this.safeValue (transactions, 0, {});
-        const price = this.safeNumber (firstTx, 'quote_amount');
-        const cost = amount * price;
+        const price = this.safeString (firstTx, 'quote_amount');
+        const cost = Precise.stringMul (amount, price);
         const fee = {
             'cost': this.safeNumber (firstTx, 'fee_amount'),
             'currency': this.mapAssetIdToSymbol (this.safeString (firstTx, 'fee_asset_id')),
@@ -810,13 +817,13 @@ export default class fswap extends Exchange {
             'symbol': symbol,
             'type': 'market',
             'timeInForce': undefined,
-            'side': amount > 0 ? 'buy' : 'sell',
-            'price': price,
+            'side': Precise.stringGt (amount, '0') ? 'buy' : 'sell',
+            'price': this.parseNumber (price),
             'average': undefined,
-            'amount': Math.abs (amount),
-            'filled': filled,
-            'remaining': remaining,
-            'cost': cost,
+            'amount': this.parseNumber (amount),
+            'filled': this.parseNumber (filled),
+            'remaining': this.parseNumber (remaining),
+            'cost': this.parseNumber (cost),
             'trades': [],
             'fee': fee,
             'info': order,
@@ -866,9 +873,9 @@ export default class fswap extends Exchange {
     // Not tested
     parseTrade (trade: any, market: any): Trade {
         const timestamp = this.parse8601 (this.safeString (trade, 'created_at'));
-        const baseAmount = this.safeNumber (trade, 'base_amount');
-        const quoteAmount = this.safeNumber (trade, 'quote_amount');
-        const price = quoteAmount / baseAmount;
+        const baseAmount = this.safeString (trade, 'base_amount');
+        const quoteAmount = this.safeString (trade, 'quote_amount');
+        const price = Precise.stringDiv (quoteAmount, baseAmount);
         const id = this.safeString (trade, 'id');
         return {
             'id': id,
@@ -878,9 +885,9 @@ export default class fswap extends Exchange {
             'symbol': market['symbol'],
             'type': undefined,
             'side': undefined,
-            'price': price,
-            'amount': baseAmount,
-            'cost': quoteAmount,
+            'price': this.parseNumber (price),
+            'amount': this.parseNumber (baseAmount),
+            'cost': this.parseNumber (quoteAmount),
             'fee': {
                 'cost': this.safeNumber (trade, 'fee_amount'),
                 'currency': market['quote'],
@@ -888,492 +895,6 @@ export default class fswap extends Exchange {
             'takerOrMaker': 'taker',
             'info': trade,
         };
-    }
-
-    buildAction (action: number, followID: string, ...args: any[]) {
-        let follow_id = followID;
-        if (!follow_id) {
-            follow_id = this.uuid ();
-        }
-        const header = {
-            'version': this.options.protocolVersion,
-            'protocol_id': this.options.protocolID,
-            'follow_id': follow_id,
-            'action': action,
-        };
-        const encoder = new TextEncoder ();
-        const headerBytes = encoder.encode (JSON.stringify (header));
-        const argsBytes = [];
-        for (let i = 0; i < args.length; i++) {
-            argsBytes.push (encoder.encode (JSON.stringify (args[i])));
-        }
-        let totalLength = headerBytes.length;
-        for (let i = 0; i < argsBytes.length; i++) {
-            totalLength += argsBytes[i].length;
-        }
-        const allBytes = new Uint8Array (totalLength);
-        allBytes.set (headerBytes, 0);
-        let offset = headerBytes.length;
-        for (let i = 0; i < argsBytes.length; i++) {
-            allBytes.set (argsBytes[i], offset);
-            offset += argsBytes[i].length;
-        }
-        const checksum = this.hash (allBytes, sha256, 'hex');
-        const combined = new Uint8Array (allBytes.length + checksum.words.length);
-        combined.set (allBytes, 0);
-        combined.set (checksum.words, allBytes.length);
-        return base64.encode (combined);
-    }
-
-    buildAddLiquidity (followID: string, oppositeAsset: string, slippage: string, expireDuration: number) {
-        return this.buildAction (
-            this.options.actionAdd,
-            followID,
-            oppositeAsset,
-            slippage.toString (),
-            Math.floor (expireDuration / 1000)
-        );
-    }
-
-    buildRemoveLiquidity (followID: string): string {
-        return this.buildAction (
-            this.options.actionRemove,
-            followID
-        );
-    }
-
-    buildSwap (followID: string, fillAsset: string, paths: any, minAmount: string) {
-        return this.buildAction (
-            this.options.actionSwap,
-            followID,
-            fillAsset,
-            paths,
-            minAmount.toString ()
-        );
-    }
-
-    // (swap.go)
-    async Swap (pair, payAssetID, payAmount) {
-        const m = this.Imp (pair.SwapMethod);
-        payAmount = this.safeNumber (payAmount, 8);
-        const feePercent = this.safeNumber (pair, 'FeePercent');
-        const profitRate = this.safeNumber (pair, 'ProfitRate');
-        const routeID = this.safeString (pair, 'RouteID');
-        const r = {
-            'FillAssetID': '',
-            'FillAmount': 0,
-            'PayAssetID': payAssetID,
-            'PayAmount': payAmount,
-            'FeeAssetID': payAssetID,
-            'FeeAmount': parseFloat ((payAmount * feePercent).toFixed (8)),
-            'ProfitAmount': parseFloat ((payAmount * profitRate).toFixed (8)),
-            'RouteID': routeID,
-        };
-        const funds = payAmount - r.FeeAmount;
-        if (funds <= 0) {
-            throw new Error ('pay amount must be positive');
-        }
-        switch (payAssetID) {
-        case this.safeString (pair, 'BaseAssetID'):
-            r.FillAssetID = this.safeString (pair, 'QuoteAssetID');
-            r.FillAmount = parseFloat ((m.Swap (this.safeNumber (pair, 'BaseAmount'), this.safeNumber (pair, 'QuoteAmount'), funds)).toFixed (8));
-            break;
-        case this.safeString (pair, 'QuoteAssetID'):
-            r.FillAssetID = this.safeString (pair, 'BaseAssetID');
-            r.FillAmount = parseFloat ((m.Swap (this.safeNumber (pair, 'QuoteAmount'), this.safeNumber (pair, 'BaseAmount'), funds)).toFixed (8));
-            break;
-        default:
-            throw new Error ('invalid pay asset id');
-        }
-        return r;
-    }
-
-    async ReverseSwap (pair, fillAssetID, fillAmount) {
-        const m = this.Imp (pair.SwapMethod);
-        fillAmount = this.safeNumber (fillAmount, 8);
-        if (fillAmount <= 0) {
-            throw new Error ('invalid fill amount');
-        }
-        const routeID = this.safeString (pair, 'RouteID');
-        const feePercent = this.safeNumber (pair, 'FeePercent');
-        const profitRate = this.safeNumber (pair, 'ProfitRate');
-        const r = {
-            'FillAssetID': fillAssetID,
-            'FillAmount': fillAmount,
-            'RouteID': routeID,
-            'PayAssetID': '',
-            'PayAmount': 0,
-            'FeeAssetID': '',
-            'FeeAmount': 0,
-            'ProfitAmount': 0,
-        };
-        switch (fillAssetID) {
-        case this.safeString (pair, 'BaseAssetID'):
-            r.PayAssetID = this.safeString (pair, 'QuoteAssetID');
-            r.PayAmount = m.Reverse (this.safeNumber (pair, 'QuoteAmount'), this.safeNumber (pair, 'BaseAmount'), fillAmount);
-            break;
-        case this.safeString (pair, 'QuoteAssetID'):
-            r.PayAssetID = this.safeString (pair, 'BaseAssetID');
-            r.PayAmount = m.Reverse (this.safeNumber (pair, 'BaseAmount'), this.safeNumber (pair, 'QuoteAmount'), fillAmount);
-            break;
-        default:
-            throw new Error ('invalid fill asset id');
-        }
-        if (r.PayAmount <= 0) {
-            throw new Error ('insufficient liquidity');
-        }
-        r.PayAmount = parseFloat ((r.PayAmount / (1 - feePercent)).toFixed (8));
-        r.FeeAssetID = r.PayAssetID;
-        r.FeeAmount = parseFloat ((r.PayAmount * feePercent).toFixed (8));
-        r.ProfitAmount = parseFloat ((r.PayAmount * profitRate).toFixed (8));
-        return r;
-    }
-
-    // Routing (route.go)
-    // graph: A plain JavaScript object representing the graph.
-    // pay: A string representing the asset being exchanged.
-    // fill: A string representing the asset received in the exchange.
-    // pair: An object representing the trading pair.
-    add (graph, pay, fill, pair) {
-        // Check if the pay asset exists in the graph
-        const payValue = this.safeValue (graph, pay);
-        if (!payValue) {
-            graph[pay] = {};
-        }
-        // Add the pair to the graph
-        graph[pay][fill] = pair;
-    }
-
-    // Adds a trading pair to the graph in both directions.
-    // graph: A plain JavaScript object representing the graph.
-    // pair: An object representing the trading pair.
-    addPair (graph, pair) {
-        // Add the pair in both directions
-        const baseAssetID = this.safeString (pair, 'baseAssetID');
-        const quoteAssetID = this.safeString (pair, 'quoteAssetID');
-        this.add (graph, baseAssetID, quoteAssetID, pair);
-        this.add (graph, quoteAssetID, baseAssetID, pair);
-    }
-
-    // Compares two nodes based on their fillAmount and depth.
-    // node1: First node object.
-    // node2: Second node object.
-    cmp (node1, node2) {
-        // Compare FillAmount first
-        const fillAmount1 = this.safeNumber (node1, 'fillAmount');
-        const fillAmount2 = this.safeNumber (node2, 'fillAmount');
-        const c = fillAmount1 - fillAmount2; // Assuming fillAmount is a number or can be converted to one
-        if (c !== 0) {
-            return c;
-        }
-        // Compare depth if FillAmount is equal
-        const depth1 = this.safeInteger (node1, 'd');
-        const depth2 = this.safeInteger (node2, 'd');
-        return this.cmpDepth (depth1, depth2);
-    }
-
-    // Compares two integers, returning 1 if the first is less, -1 if greater, and 0 if they are equal.
-    // a: First integer.
-    // b: Second integer.
-    cmpDepth (a, b) {
-        if (a < b) {
-            return 1;
-        } else if (a > b) {
-            return -1;
-        } else {
-            return 0;
-        }
-    }
-
-    // Checks if a node contains a specific route ID.
-    // node: The node object to start checking from..
-    // id: The route ID to check for.
-    contain (node, id) {
-        let iter = node;
-        while (iter && this.safeInteger (iter, 'd') > 0) {
-            const routeID = this.safeString (iter, 'routeID');
-            if (routeID === id) {
-                return true;
-            }
-            iter = this.safeValue (iter, 'p'); // Move to the previous node
-        }
-        return false;
-    }
-
-    // Retrieves the results from a node and its predecessors.
-    // node: The node from which to collect results.
-    // reverse: Boolean to decide the order.
-    results (node, reverse) {
-        const results = new Array (this.safeInteger (node, 'd')); // Create an array of the size node.d
-        let iter = node;
-        while (iter && this.safeInteger (iter, 'd') > 0) {
-            let idx = this.safeInteger (iter, 'd') - 1;
-            if (reverse) {
-                idx = results.length - this.safeInteger (iter, 'd');
-            }
-            results[idx] = this.safeValue (iter, 'result');
-            iter = this.safeValue (iter, 'p'); // Move to the previous node
-        }
-        return results;
-    }
-
-    // Route (route.go)
-    Cmp (n: any, a: any): number {
-        const c = n.FillAmount.Cmp (a.FillAmount);
-        if (c !== 0) {
-            return c;
-        }
-        return this.cmpDepth (n.d, a.d);
-    }
-
-    ReverseCmp (n: any, a: any): number {
-        const c = a.PayAmount.Cmp (n.PayAmount);
-        if (c !== 0) {
-            return c;
-        }
-        return this.cmpDepth (n.d, a.d);
-    }
-
-    route (node, graph, fillAsset, best) {
-        if (node.d >= this.options.MaxRouteDepth) {
-            return;
-        }
-        const fillAssetID = this.safeString (node, 'fillAssetID');
-        const possiblePairs = this.safeValue (graph, fillAssetID, {});
-        const keys = Object.keys (possiblePairs);
-        for (let i = 0; i < keys.length; i++) {
-            const fill = keys[i];
-            const pair = possiblePairs[fill];
-            if (this.contain (node, pair.routeID)) {
-                continue;
-            }
-            const arrived = (fill === fillAsset);
-            if (!arrived && node.d + 1 === this.options.MaxRouteDepth) {
-                continue;
-            }
-            const result = this.Swap (pair, fillAssetID, node.fillAmount);
-            if (!result) {
-                continue;
-            }
-            const nextNode = {
-                'result': result,
-                'p': node,
-                'd': node.d + 1,
-            };
-            if (!arrived) {
-                this.route (nextNode, graph, fillAsset, best);
-                continue;
-            }
-            if (this.cmp (nextNode, best) > 0) {
-                Object.assign (best, nextNode); // Copy nextNode to best
-            }
-        }
-    }
-
-    reverseRoute (node, graph, payAsset, best) {
-        if (node.d >= this.options.MaxRouteDepth) {
-            return;
-        }
-        const payAssetID = this.safeString (node, 'payAssetID');
-        const possiblePairs = this.safeValue (graph, payAssetID, {});
-        const keys = Object.keys (possiblePairs);
-        for (let i = 0; i < keys.length; i++) {
-            const pay = keys[i];
-            const pair = possiblePairs[pay];
-            if (this.contain (node, pair.routeID)) {
-                continue;
-            }
-            const arrived = (pay === payAsset);
-            if (!arrived && node.d + 1 === this.options.MaxRouteDepth) {
-                continue;
-            }
-            const result = this.ReverseSwap (pair, payAssetID, node.payAmount);
-            if (!result) {
-                continue;
-            }
-            const nextNode = {
-                'result': result,
-                'p': node,
-                'd': node.d + 1,
-            };
-            if (!arrived) {
-                this.reverseRoute (nextNode, graph, payAsset, best);
-                continue;
-            }
-            if (this.ReverseCmp (nextNode, best) > 0) {
-                Object.assign (best, nextNode); // Copy nextNode to best
-            }
-        }
-    }
-    // End of Routing (route.go)
-
-    // Interface (interface.go)
-    Imp (method) {
-        const registered = {
-            [this.options.METHOD_UNI]: {
-                'swap': this.swapUni,
-                'reverse': this.reverseUni,
-            },
-            [this.options.METHOD_CURVE]: {
-                'swap': this.swapCurve,
-                'reverse': this.reverseCurve,
-            },
-        };
-        if (!method) {
-            method = this.options.METHOD_UNI;
-        }
-        const imp = this.safeValue (registered, method);
-        if (!imp) {
-            throw new Error (`Unknown swap method "${method}"`);
-        }
-        return imp;
-    }
-
-    // Uniswap (swap/uni/uni.go)
-    swapUni (x, y, dx) {
-        const k = x * y;
-        if (k <= 0) {
-            return 0;
-        }
-        const _x = x + dx;
-        const _y = k / _x;
-        const dy = y - _y;
-        return dy;
-    }
-
-    reverseUni (x, y, dy) {
-        const k = x * y;
-        if (k <= 0) {
-            return 0;
-        }
-        const _y = y - dy;
-        if (_y <= 0) {
-            return 0;
-        }
-        const _x = k / _y;
-        const dx = _x - x;
-        return dx;
-    }
-
-    // Curve (swap/curve/curve.go)
-    swapCurve (x: number, y: number, dx: number): number {
-        x = this.shiftDecimal (x, this.options.Precision);
-        y = this.shiftDecimal (y, this.options.Precision);
-        dx = this.shiftDecimal (dx, this.options.Precision);
-        const dy = this.curveExchange (x, y, dx);
-        if (dy <= 0) {
-            return 0;
-        }
-        return this.shiftDecimal (dy, -this.options.Precision);
-    }
-
-    reverseCurve (x: number, y: number, dy: number): number {
-        if (y <= dy) {
-            return 0;
-        }
-        x = this.shiftDecimal (x, this.options.Precision);
-        y = this.shiftDecimal (y, this.options.Precision);
-        dy = this.shiftDecimal (dy, this.options.Precision);
-        const dx = this.reverseCurveExchange (x, y, dy);
-        if (dx <= 0) {
-            return 0;
-        }
-        return this.shiftDecimal (dx, -this.options.Precision);
-    }
-
-    getD (xp: number[]): number {
-        let sum = 0;
-        for (let i = 0; i < xp.length; i++) {
-            sum += xp[i];
-        }
-        if (sum <= 0) {
-            return 0;
-        }
-        let dp = 0;
-        let d = sum;
-        const ann = this.options.CURVE_A * this.options.CURVE_N_COINS;
-        for (let i = 0; i < 255; i++) {
-            let _dp = d;
-            for (let j = 0; j < xp.length; j++) {
-                _dp = (_dp * d) / (xp[j] * this.options.CURVE_N_COINS);
-            }
-            dp = d;
-            const d1 = (ann - this.options.ONE) * d;
-            const d2 = (this.options.CURVE_N_COINS + this.options.ONE) * _dp;
-            d = ((ann * sum) + (_dp * this.options.CURVE_N_COINS)) * d / (d1 + d2);
-            if (Math.trunc (d - dp) === 0) {
-                break;
-            }
-        }
-        return Math.trunc (d);
-    }
-
-    getY (d: number, x: number): number {
-        const ann = this.options.CURVE_A * this.options.CURVE_N_COINS;
-        let c = (d * d) / (x * this.options.CURVE_N_COINS);
-        c = (c * d) / (ann * this.options.CURVE_N_COINS);
-        const b = x + (d / ann);
-        let yp = 0;
-        let y = d;
-        for (let i = 0; i < 255; i++) {
-            yp = y;
-            y = (y * y + c) / (2 * y + b - d);
-            if (Math.trunc (y - yp) === 0) {
-                break;
-            }
-        }
-        return y;
-    }
-
-    getX (d: number, y: number): number {
-        const ann = this.options.CURVE_A * this.options.CURVE_N_COINS;
-        const k = (d * d * d) / (ann * this.options.CURVE_N_COINS * this.options.CURVE_N_COINS);
-        const j = (d / ann) - d + 2 * y;
-        const n = (y - j) / this.options.two;
-        return this.sqrt (k / y + n * n) + n;
-    }
-
-    curveExchange (x: number, y: number, dx: number): number {
-        const xp = [ x, y ];
-        const _x = x + dx;
-        const d = this.getD (xp);
-        const _y = this.getY (d, _x);
-        const dy = y - _y;
-        return dy;
-    }
-
-    reverseCurveExchange (x: number, y: number, dy: number): number {
-        const xp = [ x, y ];
-        const _y = y - dy;
-        const d = this.getD (xp);
-        const _x = this.getX (d, _y);
-        const dx = _x - x;
-        return dx;
-    }
-
-    // Calc Functions for Curve
-    shiftDecimal (value: number, places: number): number {
-        return value * Math.pow (10, places);
-    }
-
-    sqrt (value: number): number {
-        return Math.sqrt (value);
-    }
-    // End of Calc Functions for Curve
-
-    getPublicFromMainnetAddress (address: string): Buffer | undefined {
-        try {
-            if (!address.startsWith (this.options.MainAddressPrefix)) return undefined;
-            const data = base58.decode (address.slice (3));
-            if (data.length !== 68) return undefined;
-            const payload = data.subarray (0, data.length - 4);
-            const msg = Buffer.concat ([ Buffer.from (this.options.MainAddressPrefix), Buffer.from (payload) ]);
-            const checksum = this.options.newHash (msg);
-            if (!checksum.subarray (0, 4).equals (data.subarray (64))) return undefined;
-            return Buffer.from (payload);
-        } catch {
-            return undefined;
-        }
     }
 
     buildSafeTransactionRecipient (members: string[], threshold: number, amount: string) {
@@ -1385,7 +906,25 @@ export default class fswap extends Exchange {
         };
     }
 
+    // export interface MixAddress {
+    //     members: string[];
+    //     threshold: number;
+    // }
     buildMixAddress (ma: Dict) {
+        const getPublicFromMainnetAddress = (address: string): Buffer | undefined => {
+            try {
+                if (!address.startsWith (this.options.MainAddressPrefix)) return undefined;
+                const decodedData = base58.decode (address.slice (3));
+                if (decodedData.length !== 68) return undefined;
+                const payload = decodedData.subarray (0, decodedData.length - 4);
+                const message = Buffer.concat ([ Buffer.from (this.options.MainAddressPrefix), Buffer.from (payload) ]);
+                const checksumValue = this.options.newHash (message);
+                if (!checksumValue.subarray (0, 4).equals (decodedData.subarray (64))) return undefined;
+                return Buffer.from (payload);
+            } catch {
+                return undefined;
+            }
+        };
         if (ma.members.length > 255) {
             throw new Error (`Invalid members length: ${ma.members.length}`);
         }
@@ -1400,7 +939,7 @@ export default class fswap extends Exchange {
             if (addr.startsWith (this.options.MainAddressPrefix)) {
                 if (!type) type = 'xin';
                 if (type !== 'xin') throw new Error ('Inconsistent address type');
-                const pub = this.getPublicFromMainnetAddress (addr);
+                const pub = getPublicFromMainnetAddress (addr);
                 if (!pub) throw new Error (`Invalid mainnet address: ${addr}`);
                 memberData.push (pub);
             } else {
@@ -1414,50 +953,76 @@ export default class fswap extends Exchange {
         const msg = Buffer.concat ([ Buffer.from (this.options.MixAddressPrefix), prefix, ...memberData ]);
         const checksum = Buffer.from (sha256.create ().update (msg).digest ());
         const data = Buffer.concat ([ prefix, ...memberData, checksum.subarray (0, 4) ]);
-        return `${this.options.MixAddressPrefix}${base58.encode (data)}`;
+        return this.options.MixAddressPrefix + base58.encode (data);
     }
 
-    buildSafeTransaction (utxos, rs, gs, extra, references = []) {
+    getUnspentOutputsForRecipients (outputs: Dict[], rs: Dict[]) {
+        let totalOutput = '0';
+        for (let i = 0; i < rs.length; i++) {
+            const cur = rs[i];
+            totalOutput = Precise.stringAdd (totalOutput, cur.amount);
+        }
+        let totalInput = '0';
+        for (let i = 0; i < outputs.length; i++) {
+            const o = outputs[i];
+            if (o.state !== 'unspent') continue;
+            totalInput = Precise.stringAdd (totalInput, o.amount);
+            if (Precise.stringLt (totalInput, totalOutput)) continue;
+            const getUtxos = () => {
+                const utxos = [];
+                for (let j = 0; j <= i; j++) {
+                    utxos.push (outputs[j]);
+                }
+                return utxos;
+            };
+            return {
+                'utxos': getUtxos (),
+                'change': Precise.stringSub (totalInput, totalOutput),
+            };
+        }
+        throw new Error ('insufficient total input outputs');
+    }
+
+    buildSafeTransaction (utxos: Dict[], rs: Dict[], gs: Dict[], extra: string): Dict {
+        const references = [];
+        const encodeScript = (threshold: number) => {
+            let s = threshold.toString (16);
+            if (s.length === 1) s = '0' + s;
+            if (s.length > 2) throw new Error ('INVALID THRESHOLD ' + threshold);
+            return 'fffe' + s;
+        };
         if (utxos.length === 0) throw new Error ('empty inputs');
         if (Buffer.from (extra).byteLength > 512) throw new Error ('extra data is too long');
         let asset = '';
-        const inputs = [];
+        const inputs: Dict[] = [];
         for (let i = 0; i < utxos.length; i++) {
             const o = utxos[i];
-            if (!asset) asset = o.asset;
-            if (o.asset !== asset) throw new Error ('inconsistent asset in outputs');
-            inputs.push ({ 'hash': o.transaction_hash, 'index': o.output_index });
+            asset = this.safeString (o, 'asset');
+            const txHash = this.safeString (o, 'transaction_hash');
+            const outputIndex = this.safeInteger (o, 'output_index');
+            inputs.push ({ 'hash': txHash, 'index': outputIndex });
         }
-        const outputs = [];
+        const outputs: Dict[] = [];
         for (let i = 0; i < rs.length; i++) {
-            const r = this.safeValue (rs, i);
-            const destination = this.safeString (r, 'destination');
-            const amount = this.safeString (r, 'amount');
-            const address = this.safeString (r, 'destination');
-            const tag = this.safeString (r, 'tag');
-            if (destination) {
+            const r = rs[i];
+            if ('destination' in r) {
                 outputs.push ({
                     'type': this.options.OutputTypeWithdrawalSubmit,
-                    'amount': amount,
+                    'amount': r.amount,
                     'withdrawal': {
-                        'address': address,
-                        'tag': tag,
+                        'address': r.destination,
+                        'tag': r.tag,
                     },
                     'keys': [],
                 });
                 continue;
             }
-            const outputAmount = this.safeString (r, 'amount');
-            const keys = this.safeValue (gs[i], 'keys');
-            const mask = this.safeValue (gs[i], 'mask');
-            const threshold = this.safeInteger (r, 'threshold');
-            const script = this.encodeScript (threshold);
             outputs.push ({
                 'type': this.options.OutputTypeScript,
-                'amount': outputAmount,
-                'keys': keys,
-                'mask': mask,
-                'script': script,
+                'amount': r.amount,
+                'keys': gs[i].keys,
+                'mask': gs[i].mask,
+                'script': encodeScript (r.threshold),
             });
         }
         return {
@@ -1471,43 +1036,18 @@ export default class fswap extends Exchange {
         };
     }
 
-    encodeScript (threshold: number) {
-        let s = threshold.toString (16);
-        if (s.length === 1) s = `0${s}`;
-        if (s.length > 2) throw new Error (`INVALID THRESHOLD ${threshold}`);
-        return `fffe${s}`;
-    }
-
-    getUnspentOutputsForRecipients (outputs: Dict[], rs: Dict[]) {
-        let totalOutput = 0;
-        for (let i = 0; i < rs.length; i++) {
-            const cur = rs[i];
-            totalOutput = this.sum (totalOutput, parseFloat (cur.amount));
-        }
-        let totalInput = 0;
-        for (let i = 0; i < outputs.length; i++) {
-            const o = outputs[i];
-            if (o.state !== 'unspent') continue;
-            totalInput = this.sum (totalInput, parseFloat (o.amount));
-            if (totalInput < totalOutput) continue;
-            return {
-                'utxos': outputs.slice (0, i + 1),
-                'change': this.sum (totalInput, -totalOutput),
-            };
-        }
-        throw new Error ('insufficient total input outputs');
-    }
-
-    async safeTransfer (asset_id: string, amount: string, recipients: Dict[], threshold: number, memo: string) {
-        // This is used for Mixin safe transfer
+    async initTransfer (asset_id: string, amount: string, memo: string) {
+        const members = [ this.options.MTGMember0, this.options.MTGMember1, this.options.MTGMember2, this.options.MTGMember3, this.options.MTGMember4 ];
+        const recipients = [ this.buildSafeTransactionRecipient (members, this.options.threshold, amount) ];
         const outputs = await this.mixinPrivateGetSafeSnapshots ({
-            'threshold': threshold,
             'asset': asset_id,
             'state': 'unspent',
         });
         const { utxos, change } = this.getUnspentOutputsForRecipients (outputs, recipients);
-        if (!change.isZero () && !change.isNegative ()) {
-            recipients.push (this.buildSafeTransactionRecipient (recipients, threshold, change.toString ()));
+        if (!Precise.stringEq (change, '0') && !Precise.stringLt (change, '0')) {
+            const receivers = this.safeValue (outputs[0], 'receivers');
+            const receiversThreshold = this.safeValue (outputs[0], 'receivers_threshold');
+            recipients.push (this.buildSafeTransactionRecipient (receivers, receiversThreshold, change));
         }
         const recipientDetails = [];
         for (let i = 0; i < recipients.length; i++) {
@@ -1519,8 +1059,16 @@ export default class fswap extends Exchange {
             });
         }
         const ghosts = await this.mixinPrivateGetSafeKeys (recipientDetails);
+        console.log ('utxos', utxos);
+        console.log ('ghosts', ghosts);
         const tx = this.buildSafeTransaction (utxos, recipients, ghosts, memo);
-        const raw = encodeSafeTransaction (tx);
+        console.log ('tx', tx);
+        return tx;
+    }
+
+    // Give me the name of the next step of initTransfer
+    async initTransferStep2 () {
+
     }
 
     async createOrder (symbol: string, type: OrderType, side: OrderSide, amount: number, price?: Num, params?: {}): Promise<Order> {
