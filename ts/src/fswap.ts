@@ -1,14 +1,17 @@
 
 //  ---------------------------------------------------------------------------
 import Exchange from './abstract/fswap.js';
+import { Precise } from './base/Precise.js';
 import { eddsa } from './base/functions/crypto.js';
 import { sha256 } from './static_dependencies/noble-hashes/sha256.js';
+import { sha512 } from './static_dependencies/noble-hashes/sha512.js';
+import { blake3 } from './static_dependencies/noble-hashes/blake3.js';
 import { ed25519 } from './static_dependencies/noble-curves/ed25519.js';
 import { base58, base64 } from './static_dependencies/scure-base/index.js';
 import { BadRequest, ExchangeError, ExchangeNotAvailable, InsufficientFunds, InvalidAddress, InvalidOrder } from './base/errors.js';
 import { Balances, Currencies, Dict, Int, Market, MarketInterface, Num, Order, OrderSide, OrderType, Str, Trade } from './base/types.js';
-import { Precise } from './base/Precise.js';
-
+import { Fp as Field } from './static_dependencies/noble-curves/abstract/modular.js';
+import { numberToBytesLE, bytesToNumberLE } from './static_dependencies/noble-curves/abstract/utils.js';
 //  ---------------------------------------------------------------------------
 
 //
@@ -85,11 +88,14 @@ export default class fswap extends Exchange {
                         'safe/snapshots': 1,
                         'safe/keys': 1,
                         'safe/deposit/entries': 1,
+                        'safe/transaction/requests': 1,
+                        'safe/transactions': 1,
                     },
                 },
                 'ccxtProxy': {
                     'post': {
                         '4swap/preorder': 1,
+                        'mixin/encodetx': 1,
                     },
                 },
             },
@@ -1036,13 +1042,24 @@ export default class fswap extends Exchange {
         };
     }
 
-    async initTransfer (asset_id: string, amount: string, memo: string) {
+    convertTxToHex (tx: Dict): string {
+        const txBytes = Buffer.from (JSON.stringify (tx));
+        return txBytes.toString ('hex');
+    }
+
+    convertHexToTx (hex: string): Dict {
+        const txBytes = Buffer.from (hex, 'hex');
+        return JSON.parse (txBytes.toString ('utf8'));
+    }
+
+    async getSafeTx (asset_id: string, amount: string, memo: string): Promise<string> {
         const members = [ this.options.MTGMember0, this.options.MTGMember1, this.options.MTGMember2, this.options.MTGMember3, this.options.MTGMember4 ];
         const recipients = [ this.buildSafeTransactionRecipient (members, this.options.threshold, amount) ];
-        const outputs = await this.mixinPrivateGetSafeSnapshots ({
+        const resp = await this.mixinPrivateGetSafeSnapshots ({
             'asset': asset_id,
             'state': 'unspent',
         });
+        const outputs = this.safeValue (resp, 'data', []);
         const { utxos, change } = this.getUnspentOutputsForRecipients (outputs, recipients);
         if (!Precise.stringEq (change, '0') && !Precise.stringLt (change, '0')) {
             const receivers = this.safeValue (outputs[0], 'receivers');
@@ -1063,12 +1080,115 @@ export default class fswap extends Exchange {
         console.log ('ghosts', ghosts);
         const tx = this.buildSafeTransaction (utxos, recipients, ghosts, memo);
         console.log ('tx', tx);
-        return tx;
+        return this.convertTxToHex (tx);
     }
 
-    // Give me the name of the next step of initTransfer
-    async initTransferStep2 () {
+    async getSafeTxRaw (hexTx: string, signaturesMap: Dict[] = []) {
+        const encodeResp = await this.ccxtProxyPostMixinEncodetx ({
+            'tx': hexTx,
+            'signaturesMap': signaturesMap,
+        });
+        const raw = this.safeString (encodeResp, 'raw');
+        return raw;
+    }
 
+    async verifySafeTx (hexTx: string) {
+        // https://github.com/MixinNetwork/bot-api-nodejs-client/blob/ba30c0a54aade3d088d241207a056650919f94c4/src/client/utils/safe.ts#L129
+        // The reason why we don't use nodejs to get tx raw,
+        // is that the code would be over complicated since ccxt
+        // doesn't support access object and calculation well.
+        // Instead, we use mixin go sdk to get the tx raw,
+        const raw = await this.getSafeTxRaw (hexTx);
+        // Verify tx
+        const verifyResp = await this.mixinPrivateGetSafeTransactionRequests ([ {
+            raw,
+            'request_id': this.uuid (),
+        } ]);
+        const verifiedTx = this.safeValue (verifyResp, 'data', {});
+        return verifiedTx;
+    }
+
+    async signSafeTx (tx: Dict, views: string[], privateKey: string) {
+        const index = 0;
+        const sha512Hash = (data: Buffer) => Buffer.from (sha512.create ().update (data).digest ());
+        const blake3Hash = (data: Buffer) => Buffer.from (blake3.create ({}).update (data).digest ());
+        const ed = this.ed ();
+        // https://github.com/MixinNetwork/bot-api-nodejs-client/blob/ba30c0a54aade3d088d241207a056650919f94c4/src/client/utils/safe.ts#L265
+        const hexTx = this.convertTxToHex (tx);
+        const raw = await this.getSafeTxRaw (hexTx);
+        const msg = blake3Hash (Buffer.from (raw, 'hex'));
+        const spenty = sha512Hash (Buffer.from (privateKey.slice (0, 64), 'hex'));
+        const y = ed.setBytesWithClamping (spenty.subarray (0, 32));
+        const signaturesMap = [];
+        for (let i = 0; i < tx.inputs.length; i++) {
+            const viewBuffer = Buffer.from (views[i], 'hex');
+            const x = ed.setCanonicalBytes (viewBuffer);
+            const t = ed.scalar.add (x, y);
+            const key = Buffer.from (ed.scalar.toBytes (t));
+            const sig = ed.sign (msg, key);
+            const sigs: Record<number, string> = {};
+            sigs[index] = sig.toString ('hex');
+            signaturesMap.push (sigs);
+        }
+        return this.getSafeTxRaw (hexTx, signaturesMap);
+    }
+
+    ed () {
+        // https://github.com/MixinNetwork/bot-api-nodejs-client/blob/54b7855125f02316186747759a82b025dcc14157/src/client/utils/ed25519.ts
+        const fn = Field (ed25519.CURVE.n, undefined, true);
+        return {
+            'scalar': fn,
+            'setBytesWithClamping': (x: Buffer) => {
+                if (x.byteLength !== 32) throw new Error ('edwards25519: invalid SetBytesWithClamping input length');
+                const wideBytes = Buffer.alloc (64);
+                x.copy (wideBytes, 0, 0, 32);
+                wideBytes[0] &= 248;
+                wideBytes[31] &= 63;
+                wideBytes[31] |= 64;
+                const m = fn.create (bytesToNumberLE (wideBytes.subarray (0, 32)));
+                return m;
+            },
+            'setCanonicalBytes': (x: Buffer) => {
+                if (x.byteLength !== 32) throw new Error ('invalid scalar length');
+                // if (!isReduced(x)) throw new Error('invalid scalar encoding');
+                const s = fn.create (bytesToNumberLE (x));
+                return s;
+            },
+            'scalar.add': fn.add,
+            'scalar.toBytes': fn.toBytes,
+            'setUniformBytes': (x: Buffer) => {
+                if (x.byteLength !== 64) throw new Error ('edwards25519: invalid setUniformBytes input length');
+                const wideBytes = Buffer.alloc (64);
+                x.copy (wideBytes);
+                const m = fn.create (bytesToNumberLE (wideBytes));
+                return m;
+            },
+            'scalarBaseMult': (x: bigint) => {
+                const base = ed25519.ExtendedPoint.fromHex ('5866666666666666666666666666666666666666666666666666666666666666');
+                const res = base.multiply (x);
+                // @ts-ignore
+                return Buffer.from (res.toRawBytes ());
+            },
+            'publicFromPrivate': (priv: Buffer) => {
+                const x = this.ed ().setCanonicalBytes (priv);
+                const v = this.ed ().scalarBaseMult (x);
+                return v;
+            },
+            'sign': (msg: Buffer, key: Buffer) => {
+                const ed = this.ed ();
+                const sha512Hash = (data: Buffer) => Buffer.from (sha512.create ().update (data).digest ());
+                const digest1 = sha512Hash (key.subarray (0, 32));
+                const messageDigest = sha512Hash (Buffer.concat ([ digest1.subarray (32), msg ]));
+                const z = ed.setUniformBytes (messageDigest);
+                const r = ed.scalarBaseMult (z);
+                const pub = ed.publicFromPrivate (key);
+                const hramDigest = sha512Hash (Buffer.concat ([ r, pub, msg ]));
+                const x = ed.setUniformBytes (hramDigest);
+                const y = ed.setCanonicalBytes (key);
+                const s = numberToBytesLE (fn.add (fn.mul (x, y), z), 32);
+                return Buffer.concat ([ r, s ]);
+            },
+        };
     }
 
     async createOrder (symbol: string, type: OrderType, side: OrderSide, amount: number, price?: Num, params?: {}): Promise<Order> {
