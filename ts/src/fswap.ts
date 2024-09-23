@@ -1142,10 +1142,10 @@ export default class fswap extends Exchange {
                 if (x.byteLength !== 32) throw new Error ('edwards25519: invalid SetBytesWithClamping input length');
                 const wideBytes = Buffer.alloc (64);
                 x.copy (wideBytes, 0, 0, 32);
-                wideBytes[0] &= 248;
-                wideBytes[31] &= 63;
-                wideBytes[31] |= 64;
-                const m = fn.create (bytesToNumberLE (wideBytes.subarray (0, 32)));
+                const wideBytesUint8Array = new Uint8Array (wideBytes);
+                const adjustedBytes = ed25519.CURVE.adjustScalarBytes (wideBytesUint8Array);
+                const adjustedBuffer = Buffer.from (adjustedBytes);
+                const m = fn.create (bytesToNumberLE (adjustedBuffer.subarray (0, 32)));
                 return m;
             },
             'setCanonicalBytes': (x: Buffer) => {
