@@ -86,8 +86,10 @@ export default class fswap extends Exchange {
                 'mixinPrivate': {
                     'get': {
                         'safe/snapshots': 1,
-                        'safe/keys': 1,
                         'safe/deposit/entries': 1,
+                    },
+                    'post': {
+                        'safe/keys': 1,
                         'safe/transaction/requests': 1,
                         'safe/transactions': 1,
                     },
@@ -1075,7 +1077,7 @@ export default class fswap extends Exchange {
                 'index': i,
             });
         }
-        const ghosts = await this.mixinPrivateGetSafeKeys (recipientDetails);
+        const ghosts = await this.mixinPrivatePostSafeKeys (recipientDetails);
         console.log ('utxos', utxos);
         console.log ('ghosts', ghosts);
         const tx = this.buildSafeTransaction (utxos, recipients, ghosts, memo);
@@ -1099,16 +1101,20 @@ export default class fswap extends Exchange {
         // doesn't support access object and calculation well.
         // Instead, we use mixin go sdk to get the tx raw,
         const raw = await this.getSafeTxRaw (hexTx);
+        const request_id = this.uuid ();
         // Verify tx
-        const verifyResp = await this.mixinPrivateGetSafeTransactionRequests ([ {
+        const verifyResp = await this.mixinPrivatePostSafeTransactionRequests ([ {
             raw,
-            'request_id': this.uuid (),
+            request_id,
         } ]);
         const verifiedTx = this.safeValue (verifyResp, 'data', {});
-        return verifiedTx;
+        return {
+            verifiedTx,
+            request_id,
+        };
     }
 
-    async signSafeTx (tx: Dict, views: string[], privateKey: string) {
+    async signSafeTx (tx: Dict, views: string[], privateKey: string): Promise<string> {
         const index = 0;
         const sha512Hash = (data: Buffer) => Buffer.from (sha512.create ().update (data).digest ());
         const blake3Hash = (data: Buffer) => Buffer.from (blake3.create ({}).update (data).digest ());
@@ -1131,6 +1137,15 @@ export default class fswap extends Exchange {
             signaturesMap.push (sigs);
         }
         return this.getSafeTxRaw (hexTx, signaturesMap);
+    }
+
+    async sendSafeTx (signedRaw: string, request_id: string) {
+        const resp = await this.mixinPrivatePostSafeTransactions ({
+            'raw': signedRaw,
+            'request_id': request_id,
+        });
+        const sendedTx = this.safeValue (resp, 'data', {});
+        return sendedTx;
     }
 
     ed () {
@@ -1191,15 +1206,33 @@ export default class fswap extends Exchange {
         };
     }
 
+    async safeTransfer (asset_id: string, amount: string, memo: string) {
+        const hexTx = await this.getSafeTx (asset_id, amount, memo);
+        const { verifiedTx, request_id } = await this.verifySafeTx (hexTx);
+        const views = this.safeValue (verifiedTx[0], 'views');
+        const signedTx = await this.signSafeTx (verifiedTx, views, this.privateKey);
+        const resp = this.sendSafeTx (signedTx, request_id);
+        return resp;
+    }
+
     async createOrder (symbol: string, type: OrderType, side: OrderSide, amount: number, price?: Num, params?: {}): Promise<Order> {
         await this.loadMarkets ();
+        // 0. Convert params to 4swap compatible params
+        // 0.1 Determin payAssetId and fillAssetId based on symbol and side
+        const payAssetId = '';
+        const fillAssetId = '';
+        // 0.2 Ignore type, price
         // 1. Read pairs
         const pairs = await this.fswapPublicGetPairs ();
-        console.log (pairs);
-        // 2. Pre order with pairs
-
-        // 3. Generate memo with order
-        // 4. Transfer to bot
+        console.log ('pairs:', pairs);
+        // 2. Pre order and get memo
+        const preOrderResp = this.ccxtProxyPost4swapPreorder ({ pairs });
+        console.log ('preOrderResp:', preOrderResp);
+        const memo = this.safeString (preOrderResp, 'memo');
+        console.log ('memo:', memo);
+        // 3. Init safe tx
+        const resp = await safeTransfer (payAssetId, amount.toString (), memo);
+        console.log ('safeTransfer:', resp);
     }
 
     sign (path, api = 'fswapPublic', method = 'GET', params = {}, headers = undefined, body = undefined) {
@@ -1216,11 +1249,11 @@ export default class fswap extends Exchange {
         // @returns {object} an object containing the signed request data (url, method, body, headers)
         //
         let url = this.urls['api'][api] + '/' + this.implodeParams (path, params);
-        if (api === 'mixinPrivate' || api === 'fswapPrivate') {
+        if (api === 'mixinPrivate' || api === 'fswapPrivate' || api === 'ccxtProxy') {
             this.checkRequiredCredentials ();
             const requestID = this.uuid ();
             let actualPath = '/' + path;
-            if (api === 'fswapPrivate') {
+            if (api === 'fswapPrivate' || api === 'ccxtProxy') {
                 actualPath = '/me';
             }
             const jwtToken = this.signAuthenticationToken (method, actualPath, params, requestID);
