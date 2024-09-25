@@ -562,6 +562,18 @@ export default class fswap extends Exchange {
         return finalSymbol;
     }
 
+    mapSymbolToAssetId (symbol: string): string {
+        const assetMap = this.options.AssetMap;
+        const assetIds = Object.keys (assetMap);
+        for (let i = 0; i < assetIds.length; i++) {
+            const assetId = assetIds[i];
+            if (assetMap[assetId] === symbol) {
+                return assetId;
+            }
+        }
+        return '';
+    }
+
     async fetchCurrencies (params = {}): Promise<Currencies> {
         //
         // @method
@@ -1219,19 +1231,36 @@ export default class fswap extends Exchange {
         await this.loadMarkets ();
         // 0. Convert params to 4swap compatible params
         // 0.1 Determin payAssetId and fillAssetId based on symbol and side
-        const payAssetId = '';
-        const fillAssetId = '';
-        // 0.2 Ignore type, price
-        // 1. Read pairs
-        const pairs = await this.fswapPublicGetPairs ();
-        console.log ('pairs:', pairs);
-        // 2. Pre order and get memo
-        const preOrderResp = this.ccxtProxyPost4swapPreorder ({ pairs });
+        const [ baseSymbol, quoteSymbol ] = symbol.split ('/');
+        let payAssetId = '';
+        let fillAssetId = '';
+        if (side === 'buy') {
+            payAssetId = this.mapSymbolToAssetId (baseSymbol);
+            fillAssetId = this.mapSymbolToAssetId (quoteSymbol);
+        }
+        if (side === 'sell') {
+            payAssetId = this.mapSymbolToAssetId (quoteSymbol);
+            fillAssetId = this.mapSymbolToAssetId (baseSymbol);
+        }
+        if (!payAssetId) {
+            throw new Error ('Unable to find asset id for payAsset');
+        }
+        if (!fillAssetId) {
+            throw new Error ('Unable to find asset id for fillAsset');
+        }
+        // 1. Pre order and get memo
+        const followID = this.uuid ();
+        const preOrderResp = this.ccxtProxyPost4swapPreorder ({
+            payAssetId,
+            fillAssetId,
+            'payAmount': amount.toString (),
+            followID,
+        });
         console.log ('preOrderResp:', preOrderResp);
         const memo = this.safeString (preOrderResp, 'memo');
         console.log ('memo:', memo);
         // 3. Init safe tx
-        const resp = await safeTransfer (payAssetId, amount.toString (), memo);
+        const resp = await this.safeTransfer (payAssetId, amount.toString (), memo);
         console.log ('safeTransfer:', resp);
     }
 
