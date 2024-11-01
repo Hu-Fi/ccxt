@@ -169,6 +169,9 @@ import {SecureRandom} from "../static_dependencies/jsencrypt/lib/jsbn/rng.js";
 import {getStarkKey, ethSigToPrivate, sign as starknetCurveSign} from '../static_dependencies/scure-starknet/index.js';
 import * as Starknet from '../static_dependencies/starknet/index.js';
 import Client from './ws/Client.js'
+import { buildSafeTransaction, buildSafeTransactionRecipient, encodeSafeTransaction, getUnspentOutputsForRecipients, signSafeTransaction } from '../static_dependencies/mixin-node-sdk/client/utils/safe.js'
+import { blake3Hash } from '../static_dependencies/mixin-node-sdk/client/utils/uniq.js'
+import { base64RawURLEncode } from '../static_dependencies/mixin-node-sdk/client/utils/base64.js'
 // ----------------------------------------------------------------------------
 /**
  * @class Exchange
@@ -1532,6 +1535,34 @@ export default class Exchange {
         // TODO: unify to ecdsa
         const signature = starknetCurveSign (hash.replace ('0x', ''), pri.slice (-64));
         return this.json ([ signature.r.toString (), signature.s.toString () ]);
+    }
+
+    mixinGetUnspentOutputsForRecipients(outputs, rs) {
+        return getUnspentOutputsForRecipients(outputs, rs);
+    }
+
+    mixinBuildSafeTransaction(utxos, rs, gs, extra, references = []) {
+        return buildSafeTransaction(utxos, rs, gs, extra, references);
+    }
+
+    mixinBuildSafeTransactionRecipient(members, threshold, amount) {
+        return buildSafeTransactionRecipient(members, threshold, amount);
+    }
+
+    mixinEncodeSafeTransaction(tx) {
+        return encodeSafeTransaction(tx);
+    }
+
+    mixinSignSafeTransaction(raw, views, privateKey, index = 0) {
+        return signSafeTransaction(raw, views, privateKey, index);
+    }
+
+    mixinBlake3Hash(raw) {
+        return blake3Hash(Buffer.from(raw, 'hex')).toString('hex');
+    }
+
+    base64RawURLEncode(raw) {
+        return base64RawURLEncode(raw);
     }
 
     intToBase16(elem): string {
